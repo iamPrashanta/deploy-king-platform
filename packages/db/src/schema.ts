@@ -198,6 +198,58 @@ export const cronJobs = pgTable("cron_jobs", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// ─── UNIFIED EVENT BUS ────────────────────────────────────────────────────────
+export const platformEvents = pgTable("platform_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nodeId: uuid("node_id").references(() => nodes.id, { onDelete: "cascade" }),
+  siteId: uuid("site_id").references(() => sites.id, { onDelete: "cascade" }),
+  
+  category: varchar("category", { length: 50 }).notNull(), // deployment | security | infra | compliance | auth
+  type: varchar("type", { length: 100 }).notNull(), // e.g. site.crash, ssh.login, drift.detected
+  severity: varchar("severity", { length: 20 }).default("info"),
+  
+  summary: text("summary").notNull(),
+  details: jsonb("details"),
+  
+  actorId: uuid("actor_id").references(() => users.id),
+  traceId: varchar("trace_id", { length: 100 }),
+  correlationId: varchar("correlation_id", { length: 100 }),
+  
+  timestamp: timestamp("timestamp").defaultNow(),
+});
+
+// ─── INFRASTRUCTURE KNOWLEDGE & MEMORY ───────────────────────────────────────
+export const memoryChunks = pgTable("memory_chunks", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id"),
+  
+  type: varchar("type", { length: 30 }).notNull(), // episodic | semantic | procedural | operational
+  sourceType: varchar("source_type", { length: 50 }), // event | policy | remediation | doc
+  sourceId: uuid("source_id"),
+  
+  content: text("content").notNull(),
+  metadata: jsonb("metadata"),
+  
+  // Note: embedding would be a vector type in pgvector. 
+  // For drizzle-pg we'll use a placeholder or custom type if available.
+  // embedding: customVector("embedding", { dimensions: 1536 }),
+  
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const memorySummaries = pgTable("memory_summaries", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nodeId: uuid("node_id").references(() => nodes.id),
+  
+  category: varchar("category", { length: 50 }), // daily_digest | deployment_summary | incident_report
+  content: text("content").notNull(),
+  
+  startTime: timestamp("start_time"),
+  endTime: timestamp("end_time"),
+  
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // ─── NODES ──────────────────────────────────────────────────────────────────
 export const nodes = pgTable("nodes", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -405,6 +457,98 @@ export const securityActions = pgTable("security_actions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// ─── AI INTELLIGENCE GATEWAY ─────────────────────────────────────────────────
+export const aiProviders = pgTable("ai_providers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id"),
+  name: varchar("name", { length: 100 }).notNull(),
+  type: varchar("type", { length: 50 }).notNull(), // openai | anthropic | ollama | gemini
+  baseUrl: text("baseUrl"),
+  apiKeyId: uuid("api_key_id").references(() => secrets.id), // Link to encrypted secret
+  model: varchar("model", { length: 100 }),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const aiSessions = pgTable("ai_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").references(() => users.id),
+  tenantId: uuid("tenant_id"),
+  title: varchar("title", { length: 255 }),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const aiIntents = pgTable("ai_intents", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  sessionId: uuid("session_id").references(() => aiSessions.id),
+  nodeId: uuid("node_id").references(() => nodes.id),
+  
+  intentType: varchar("intent_type", { length: 100 }).notNull(), // restart_workload | harden_node | quarantine
+  status: varchar("status", { length: 20 }).default("pending"), // pending | approved | executed | rejected
+  
+  params: jsonb("params"),
+  reasoning: text("reasoning"),
+  riskScore: integer("risk_score"),
+  
+  traceId: varchar("trace_id", { length: 100 }),
+  approvedBy: uuid("approved_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ─── INFRASTRUCTURE KNOWLEDGE GRAPH ──────────────────────────────────────────
+export const entities = pgTable("entities", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  type: varchar("type", { length: 50 }).notNull(), // node | container | site | user | domain | alert | session
+  externalId: varchar("external_id", { length: 255 }), // e.g. nodeId or siteId
+  name: varchar("name", { length: 255 }),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const entityRelations = pgTable("entity_relations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  sourceId: uuid("source_id").references(() => entities.id, { onDelete: "cascade" }),
+  targetId: uuid("target_id").references(() => entities.id, { onDelete: "cascade" }),
+  relation: varchar("relation", { length: 100 }).notNull(), // OWNS | RUNS | ACCESSED | TRIGGERED | CAUSED
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ─── WORKFLOW ENGINE ─────────────────────────────────────────────────────────
+export const workflows = pgTable("workflows", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id"),
+  name: varchar("name", { length: 255 }).notNull(),
+  type: varchar("type", { length: 50 }).notNull(), // deployment | remediation | backup | audit
+  status: varchar("status", { length: 20 }).default("pending"), // pending | running | completed | failed | cancelled
+  
+  traceId: varchar("trace_id", { length: 100 }),
+  context: jsonb("context"),
+  
+  error: text("error"),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const workflowSteps = pgTable("workflow_steps", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  workflowId: uuid("workflow_id").references(() => workflows.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 255 }).notNull(),
+  order: integer("order").notNull(),
+  
+  action: varchar("action", { length: 100 }).notNull(), // e.g. docker.pull, node.harden, notify.admin
+  params: jsonb("params"),
+  
+  status: varchar("status", { length: 20 }).default("pending"),
+  result: jsonb("result"),
+  error: text("error"),
+  
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+});
+
 // ─── EXPORTS ──────────────────────────────────────────────────────────────────
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -426,3 +570,13 @@ export type SecurityPolicy = typeof securityPolicies.$inferSelect;
 export type NodeHardeningState = typeof nodeHardeningState.$inferSelect;
 export type SecurityRemediationPlan = typeof securityRemediationPlans.$inferSelect;
 export type SecurityAction = typeof securityActions.$inferSelect;
+export type PlatformEvent = typeof platformEvents.$inferSelect;
+export type MemoryChunk = typeof memoryChunks.$inferSelect;
+export type MemorySummary = typeof memorySummaries.$inferSelect;
+export type AIProviderConfig = typeof aiProviders.$inferSelect;
+export type AISession = typeof aiSessions.$inferSelect;
+export type AIIntentLog = typeof aiIntents.$inferSelect;
+export type Entity = typeof entities.$inferSelect;
+export type EntityRelation = typeof entityRelations.$inferSelect;
+export type Workflow = typeof workflows.$inferSelect;
+export type WorkflowStep = typeof workflowSteps.$inferSelect;

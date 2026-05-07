@@ -6,15 +6,67 @@ Unlike traditional hosting panels, DBBKP implements a **Desired State Reconcilia
 
 ---
 
-## 🏛️ Core Architecture
+## 🏛️ Architecture Overview
 
-The platform is divided into distinct planes to ensure reliability, security, and scalability:
+The platform is designed around a **multi-plane architecture** that separates control logic from high-risk execution:
 
-*   **Control Plane**: API, UI, and RBAC engine (Node.js + tRPC).
-*   **Execution Plane**: Policy-driven command execution via the **Execution Broker**.
-*   **Security Plane**: Real-time EDR, FIM, and behavioral anomaly detection.
-*   **Compliance Plane**: Desired state enforcement and remediation lifecycle.
-*   **Data Plane**: Hardened container runtimes and isolated tenant workloads.
+```mermaid
+graph TD
+    subgraph "Control Plane (API/UI)"
+        API[tRPC Backend]
+        UI[Next.js Dashboard]
+        RBAC[RBAC Engine]
+    end
+
+    subgraph "Compliance Plane"
+        RECON[Reconciliation Engine]
+        REMED[Remediation Engine]
+        POLICY[Policy Packs]
+    end
+
+    subgraph "Security Plane (EDR/FIM)"
+        AGENT[Go EDR Agent]
+        TELE[Network Telemetry]
+        FIM[File Integrity]
+    end
+
+    subgraph "Intelligence Plane"
+        AI[AI Context Engine]
+        INTENT[Intent Generator]
+        MCP[MCP Server]
+    end
+
+    subgraph "Execution Plane"
+        BROKER[Execution Broker]
+        WORKER[Deployment Workers]
+    end
+
+    subgraph "Data Plane (Workloads)"
+        CONT[Hardened Containers]
+        QUOTA[Resource Quotas]
+    end
+
+    API --> AI
+    AI --> INTENT
+    INTENT --> BROKER
+    BROKER --> CONT
+    AGENT --> TELE
+    TELE --> API
+    RECON --> API
+    REMED --> BROKER
+```
+
+---
+
+## 🚀 Feature Classification
+
+| Category | Features |
+| :--- | :--- |
+| **Core OSS** | Container Deployments, CI/CD Pipelines, Real-time Metrics, Multi-node Dashboard |
+| **Advanced OSS** | EDR-lite, FIM, Resource Quotas (PIDs/RAM), WebSocket Terminal, PTY Auditing |
+| **Enterprise** | Policy Packs (CIS/PCI), Security Reconciler, Approval Workflows, Compliance Reports |
+| **Intelligence** | AI SRE (Auto-healing), AI Security Analyst, Local LLM (Ollama), MCP Tool Server |
+| **Managed** | Hosted Control Plane, Multi-cluster Federation, Global Load Balancing |
 
 ---
 
@@ -22,64 +74,54 @@ The platform is divided into distinct planes to ensure reliability, security, an
 
 ### 🔄 Desired State Reconciliation
 The platform continuously monitors the delta between your **Desired State** (defined in the DB) and the **Observed State** (reported by agents).
-- **Self-Healing**: If a container crashes or is deleted, the reconciler automatically restores it.
-- **Security Drift**: If a system configuration (like `sshd_config`) is changed manually, the system detects the drift and triggers a remediation plan.
+- **Self-Healing**: Automatically detects crashed site containers and triggers recovery deployments.
+- **Security Drift**: Detects manual changes to `sshd_config`, `ufw`, or `authorized_keys` and alerts or auto-remediates based on mode.
 
-### 🛡️ Execution Broker
-All infrastructure mutations flow through a centralized **Execution Broker**. 
-- **Intent Validation**: No command is trusted implicitly. Every execution must declare a structured "Intent" (actor, tenant, command class).
-- **Hardened Decision Point**: Validates commands against multi-tenant boundaries and security policies before execution.
-- **Audit Correlation**: Links every shell command to a specific user session and trace ID for forensic auditability.
+### 🛡️ Execution Broker (Zero-Trust Execution)
+No infrastructure mutation is trusted implicitly. All shell and Docker actions flow through the **Execution Broker**.
+- **Intent-Based Validation**: Requires a structured "Intent" (actor, tenant, command class) before execution.
+- **Safety Guards**: Automated pre-flight checks (e.g., `ssh_access` guard) prevent accidental lockout during hardening.
+- **Trace Correlation**: Links every low-level command to a specific user request and `traceId`.
 
-### 📦 Runtime Isolation & Quotas
-Every deployed workload is isolated using hardened container policies:
-- **Resource Quotas**: Enforced via cgroups (CPU shares, Memory limits).
-- **Fork-Bomb Protection**: Strict `pids-limit` enforcement.
-- **Hardened Security**: `no-new-privileges`, non-root execution, and read-only filesystem policies.
-- **Network Isolation**: Egress filtering and outbound telemetry tracking.
+### 📦 Hardened Runtime & Quotas
+Workloads are isolated using enterprise-grade container policies:
+- **Resource Limits**: CPU shares, Memory quotas, and **Fork-Bomb Protection** (`pids-limit`).
+- **Security Context**: `no-new-privileges`, non-root execution, and read-only filesystem support.
+- **Egress Governance**: Outbound connection tracking and protocol-level risk analysis.
 
 ---
 
 ## 🔍 Security Plane (EDR & Posture)
 
-DBBKP includes a distributed security subsystem that provides deep infrastructure visibility:
+DBBKP transforms your infrastructure into a forensically-aware environment:
 
-- **EDR-Lite**: Real-time process ancestry tracking and behavioral anomaly detection.
-- **File Integrity (FIM)**: SHA-256 hashing and entropy analysis to detect web-shells and PHP malware.
-- **Network Telemetry**: Ingestion of outbound connections, DNS requests, and risk-based ASN/Geo tracking.
-- **Posture Scoring**: Continuous assessment of host security (SSH, Firewall, Users) against a hardened baseline.
-
----
-
-## 🏢 Compliance & Hardening
-
-Move from "settings" to "policy-driven" governance.
+- **EDR Explorer**: Real-time process ancestry, risk scoring, and behavioral signal detection.
+- **File Integrity (FIM)**: Tracks SHA-256 hashes, inodes, and entropy to detect web-shells and persistent malware.
+- **Network Telemetry**: Ingests outbound connections and DNS requests to identify C2 callbacks or crypto-pools.
+- **Remediation Lifecycle**: A formal `Plan -> Approve -> Execute -> Verify` workflow for all security fixes.
 
 ### Security Modes
-- **Monitor**: Detect drift and alert only.
-- **Guided**: Generate remediation plans for manual approval.
-- **Enforce**: Automatically remediate configuration drift.
-- **Locked**: Strict, immutable hardened baseline enforcement.
-
-### Policy Packs
-Deploy pre-bundled security baselines like **Ubuntu Hardened** or **Hosting Safe Mode** across your fleet with a single click.
+1. **Monitor**: Detect drift and report anomalies without changing state.
+2. **Guided**: Generate remediation plans for admin review and approval.
+3. **Enforce**: Automatically restore the security baseline upon drift detection.
+4. **Locked**: Strict enforcement of a hardened, immutable security posture.
 
 ---
 
-## 👥 Multi-Tenant Security
-- **RBAC Engine**: Granular permission model for developers, admins, and auditors.
-- **PTY Auditing**: Every terminal session is recorded, linked to a tenant, and audited for dangerous commands.
-- **Ownership Validation**: Strict mapping between containers, volumes, and user IDs.
+## 🏢 Multi-Tenant Governance
+- **RBAC Engine**: Granular permissions (sites, security, infra) with tenant scoping.
+- **PTY Session Auditing**: Full recording and keystroke analysis of terminal interactions.
+- **Tenant Isolation**: Strict ownership validation ensures users only interact with their own resources.
 
 ---
 
 ## 🛠️ Technical Stack
 
-- **Backend**: Node.js, tRPC, BullMQ (Async Workers).
-- **Frontend**: Next.js 15, xterm.js (Terminal), High-performance WebSockets.
-- **Agent**: High-performance Go agent + Autonomous Bash scripts.
+- **Backend**: Node.js 22, tRPC, BullMQ (Queueing).
+- **Frontend**: Next.js 15, xterm.js, High-performance WebSockets.
+- **Security**: Go EDR Agent, Autonomous Bash Scripts.
 - **Storage**: PostgreSQL (Drizzle ORM), Redis (Event Bus).
-- **Infrastructure**: Docker Engine, UFW, Systemd.
+- **Runtime**: Docker Engine, UFW, Systemd.
 
 ---
 
@@ -93,7 +135,7 @@ pnpm install
 ### 2. Configure Environment
 Create a `.env` file based on `.env.example`.
 
-### 3. Setup Database
+### 3. Setup Infrastructure
 ```bash
 pnpm db:generate
 pnpm db:migrate
@@ -112,7 +154,7 @@ pnpm dev
 DBBKP is built for organizations that need more than a panel—they need a **Secure Infrastructure Operating System**.
 
 *   **PaaS Capability**: Like Coolify / Dokploy.
-*   **Security Automation**: Like EDR / Host Hardening.
+*   **Security Automation**: Like EDR / Posture Management.
 *   **Self-Healing**: Like Kubernetes.
 *   **Unified Visibility**: Like Datadog.
 

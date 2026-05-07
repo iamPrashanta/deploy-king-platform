@@ -405,6 +405,7 @@ To prevent monolith growth, DBBKP will evolve into domain-separated modules.
 | ------------- | -------------------- |
 | orchestration | Deployments          |
 | runtime       | Containers           |
+| intelligence  | AI Reasoning         |
 | governance    | Policies             |
 | identity      | RBAC/Auth            |
 | security      | EDR/FIM              |
@@ -430,6 +431,158 @@ DBBKP is designed around:
 
 ---
 
+# 🤖 Phase 10 — Intelligence Plane
+
+## Goal
+
+Transform DBBKP into an AI-native infrastructure orchestration engine.
+
+---
+
+## 10.1 AI Provider Abstraction
+
+* Support for External Providers (OpenAI, Anthropic, Gemini, OpenRouter)
+* Deep integration with Local AI (Ollama, vLLM, LM Studio)
+* Universal AIProvider interface for chat, embeddings, and tools
+
+## 10.2 Model Context Protocol (MCP) Integration
+
+* Expose platform tools as MCP resources
+* Safe interaction boundaries (AI → Intent → Broker)
+* Contextual data injection for LLM reasoning
+
+## 10.3 AI Infrastructure Intelligence (Infrastructure Memory)
+
+* **Operational Memory (IMA)**: High-fidelity memory system using pgvector for episodic (incidents), semantic (policies), and procedural (remediation) knowledge.
+* **Context Compression**: Automated summarization of noisy telemetry (logs, metrics) into semantic operational digests.
+* **Semantic Retrieval**: Context-aware retrieval engine that scores evidence by similarity, recency, and risk.
+* **Explainability Engine**: "Reasoning Trace" generation that explains AI decisions using retrieved evidence from the memory store.
+* **AI SRE**: Autonomous incident triage, anomaly correlation, and remediation suggestions.
+* **AI Security Analyst**: Automated attack summarization, risk explaining, and pattern detection.
+* **Operational Memory**: Persistence of incident outcomes and failure patterns for better reasoning.
+
+---
+
+# 🕸️ Phase 11 — Infrastructure Graph & Causality
+
+## Goal
+
+Model complex infrastructure relationships for deep forensic reasoning.
+
+## 11.1 Infrastructure Knowledge Graph
+
+* Entity Modeling (Node → Container → Site → User → Domain)
+* Causal Relationship Tracking (TRIGGERED, CAUSED, MODIFIED)
+* Multi-dimensional relationship traversal for AI reasoning
+
+## 11.2 Timeline Reconstruction Engine
+
+* Deterministic incident replay timelines
+* Correlation of metrics, logs, and security alerts into causal chains
+* Visual incident playback for security operators
+
+---
+
+# ⚖️ Phase 12 — Deterministic Decision Engine
+
+## Goal
+
+Provide auditable, safe, and rule-based infrastructure automation.
+
+## 12.1 Policy Automation Rules
+
+* Deterministic "IF-THEN" remediation logic (e.g., IF risk > 90 AND outbound > 1GB THEN quarantine)
+* Risk-weighted automated responses
+* Safety DAGs to prevent cascading failures
+
+## 12.2 Explainable Automation
+
+* Every automated action must generate a structured "Reasoning Trace"
+* Manual override and "Dry-run" simulation modes
+* Blast-radius analysis before automated remediation
+
+---
+
+# 🤖 Phase 13 — Autonomous SRE Assistant
+
+* Fully integrated AI reasoning with Infrastructure Memory and Graph context
+* AI-assisted capacity planning and predictive failure analysis
+* Autonomous "Self-Healing" via policy-governed AI Intents
+
+---
+
+# 🏢 Phase 14 — Infrastructure Digital Twin
+
+* Live topology modeling and simulation
+* Predictive "What-if" analysis for infrastructure changes
+* Simulated blast-radius mapping for security incidents
+* Infrastructure state versioning and diffing (GitOps for Graph)
+
+---
+
+# 🛸 Phase 15 — Infrastructure Kernel
+
+## Goal
+
+Standardize the platform operating model through unified protocols and registries.
+
+## 15.1 Unified Platform Protocols
+
+*   **Unified Event Schema**: Single contract for all platform telemetry (audit, security, deployments).
+*   **Unified Entity System**: Standardized global IDs and reference types for graph correlation.
+*   **Unified Execution Contracts**: Governed infrastructure intent language for all mutations.
+
+## 15.2 Capability Negotiation
+
+*   **Capability Registry**: Dynamic discovery of node features (e.g., `container.exec`, `ssl.issue`).
+*   **Node Capability Handshake**: Real-time negotiation of operational capabilities during agent heartbeats.
+
+---
+
+# ⛓️ Phase 16 — Workflow & Decision Engine
+
+## Goal
+
+Provide orchestrated, resumable, and auditable infrastructure automation.
+
+## 16.1 Infrastructure DAG Engine
+
+*   Multi-step orchestrated workflows (Deploy → Verify → Harden).
+*   Resumable execution with state persistence and error handling.
+*   Parallel step execution with dependency management.
+
+## 16.2 Safety Workflows
+
+*   Automated rollback graphs for failed remediations.
+*   Mandatory approval gates for high-risk operations.
+*   Simulation-first execution (Dry-run by default).
+
+---
+
+# 🔮 Phase 17 — Digital Twin & Predictive Infra
+
+*   Topology-aware failure propagation analysis.
+*   Drift forecasting based on historical compliance trends.
+*   Predictive "Blast Radius" mapping for hypothetical incidents.
+
+---
+
+# 🌐 Phase 18 — Enterprise Federation
+
+*   Multi-cluster control plane federation.
+*   Policy inheritance across organization hierarchies.
+*   Regional control planes with global traffic governance.
+*   Sovereign infrastructure zones for distributed compliance.
+
+## 10.4 Intent-Based AI Governance
+
+* AI generates "Intents", not raw commands
+* Mandatory Execution Broker validation for all AI-generated actions
+* RBAC-integrated AI execution policies
+* Advisory vs. Autonomous operational modes
+
+---
+
 # 🎯 Strategic Positioning
 
 DBBKP is NOT:
@@ -442,7 +595,7 @@ DBBKP is NOT:
 DBBKP is becoming:
 
 ```txt
-A Secure Self-Healing Infrastructure Operating System
+A Secure Self-Healing Intelligence-Native Infrastructure OS
 ```
 
 combining:
@@ -466,6 +619,7 @@ Create a platform capable of managing:
 * distributed nodes
 * workloads
 * infrastructure security
+* intelligence-driven operations
 * runtime governance
 * compliance posture
 * operational reliability
