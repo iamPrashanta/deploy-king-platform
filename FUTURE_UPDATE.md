@@ -1,90 +1,477 @@
-# 🚀 DBBKP Platform — Future Scope & Roadmap
+# 🚀 DBBKP — FUTURE_UPDATE.md
 
-This document outlines the strategic roadmap for evolving the DBBKP platform from a single-node PaaS into a production-grade DevOps control plane.
+## Vision
 
----
+DBBKP is evolving into a **Security-Aware Distributed Infrastructure Operating System** focused on:
 
-## 📊 Current Platform Maturity: Tier 2 (Single-Node PaaS)
+* Self-healing orchestration
+* Runtime governance
+* Multi-tenant isolation
+* Security posture enforcement
+* Distributed infrastructure reconciliation
+* Compliance-driven automation
 
-### ✔ Completed Milestones
+The long-term objective is to unify:
 
-- [x] **Containerized Isolation**: Full Docker-per-site runtime.
-- [x] **Build vs Runtime Separation**: Ephemeral build containers for dependency resolution.
-- [x] **Infra Orchestration**: Automated Port Management + Nginx Reverse Proxy.
-- [x] **Multi-Runtime Support**: Auto-detection for Node.js and Python.
-- [x] **Queue-Based Execution**: BullMQ-backed orchestration with WebSocket live logs.
-- [x] **Persistence & Logging**: Host-volume binding + DB/File log separation.
+* PaaS orchestration
+* Infrastructure governance
+* Runtime security
+* Distributed observability
+* Host hardening
+* Incident response
 
----
-
-## 🧪 Strategic Roadmap: Phase-by-Phase
-
-### 🔥 Phase 1: Production Stability (Immediate Impact)
-
-> **Goal**: Bridge the gap between "functional" and "reliable".
-
-1. **Docker Image Build System**
-   - Transition from `docker run` + runtime install to `docker build` with tagging (e.g., `site-id:v1`).
-   - This enables **Image Reproducibility** and **Atomic Deploys**.
-2. **Deployment Versioning & Rollback**
-   - Keep history of the last 3–5 images.
-   - Implementation of a one-click Revert/Rollback system.
-3. **Secrets & Environment Manager**
-   - Encrypted storage for `.env` variables in the database.
-   - Secure injection of variables into containers at runtime.
-4. **SSL Automation (Let’s Encrypt)**
-   - Integration with `certbot` for automatic certificate issuance and renewal.
-   - Auto-attachment of SSL blocks to Nginx configurations.
-
-### 🟡 Phase 2: The "Control Panel" Power
-
-> **Goal**: Add traditional hosting features similar to Plesk/cPanel.
-
-1. **Domain & DNS Management**
-   - UI for mapping multiple domains to a single site.
-   - DNS record management (initially A/CNAME records).
-2. **File Manager (Browser-based)**
-   - Web-based interface to edit, upload, and delete files in the site's `docRoot`.
-3. **Cron Jobs UI**
-   - Schedule recurring scripts, maintenance tasks, or pipeline triggers.
-4. **Logs UI Improvements**
-   - Searchable, filterable historical logs for both CI and Runtime.
-
-### 🔵 Phase 3: Infrastructure Scaling
-
-> **Goal**: Move toward multi-node orchestration like Coolify.
-
-1. **Multi-Server Management**
-   - Connect remote nodes via SSH.
-   - Deploy containers to specific servers from a single control plane.
-2. **Real-time Metrics Dashboard**
-   - CPU / RAM / Disk usage graphs per site using Docker stats.
-3. **GitHub Webhook Integration**
-   - Automatic deployment triggers on `git push`.
+into a single cohesive control plane.
 
 ---
 
-## 🧭 Strategic Identity: PaaS vs Hosting
+# 🏗️ Current Platform State
 
-As we evolve, the platform must choose a primary identity to avoid feature bloat:
+## Current Maturity
 
-| Feature Focus | **Direction A: DevOps PaaS** (Vercel/Railway) | **Direction B: Hosting Panel** (cPanel/Plesk) |
-| :--- | :--- | :--- |
-| **Primary Target** | Developers & Agencies | Business Owners & Resellers |
-| **Key Advantage** | Fast CI/CD, Git integration, Previews | Domain/Email/File Management |
-| **Tech Stack** | Docker, K8s, Serverless | Nginx, PHP, BIND, Exim |
-
-> **Current Decision**: Evolve as a **Developer-first PaaS** (Option A) with high-leverage hosting features (Option B) to compete in the "Modern Control Panel" space.
+```txt
+Tier 4 — Security-Aware Distributed Control Plane
+```
 
 ---
 
-## 🛠️ Upcoming Implementation: "The Next Big Leap"
+# ✅ Core Platform Capabilities (Already Implemented)
 
-We are currently focusing on the **Docker Image Builder** and **SSL Automation**. This will involve:
+## Control Plane
 
-1. Moving from direct file execution to **Dockerfile generation**.
-2. Automating **Certbot-over-Nginx** workflows.
-3. Implementing **Encrypted Env Injection**.
+* Next.js 15 dashboard
+* tRPC API architecture
+* JWT authentication
+* RBAC permissions engine
+* Multi-tenant access isolation
+* WebSocket real-time gateway
+* Audit logging
+* Distributed trace correlation
 
 ---
-*Last Updated: 2026-04-30* — DBBKP Automation
+
+## Execution Plane
+
+* Centralized Execution Broker
+* Intent-aware command execution
+* Policy validation
+* Runtime ownership enforcement
+* Queue-based orchestration
+* Deployment workers
+* Rollback engine
+* Preview environments
+* GitHub webhook deployments
+
+---
+
+## Runtime Plane
+
+* Docker-per-site isolation
+* Build/runtime separation
+* Hardened runtime policies
+* Non-root containers
+* PID limits (fork-bomb protection)
+* Memory quotas
+* CPU quotas
+* no-new-privileges enforcement
+* Runtime reconciliation
+* Self-healing deployments
+
+---
+
+## Security Plane
+
+* Distributed Go EDR agent
+* Malware scanning
+* SEO spam detection
+* Suspicious cron detection
+* Suspicious process explorer
+* Reverse shell detection
+* File Integrity Monitoring (FIM)
+* Network telemetry ingestion
+* Risk scoring engine
+* Security posture management
+* Policy-driven hardening
+* Remediation lifecycle engine
+* Drift detection & reconciliation
+
+---
+
+## Compliance Plane
+
+* Desired-state enforcement
+* Security modes:
+
+  * Monitor
+  * Guided
+  * Enforce
+  * Locked
+* Policy packs
+* Immutable action history
+* Correlated remediation actions
+* SSH hardening automation
+* Firewall governance
+* User isolation policies
+
+---
+
+# 🧠 Architectural Philosophy
+
+DBBKP is designed around:
+
+* Desired-state reconciliation
+* Eventual consistency
+* Autonomous recovery
+* Idempotent execution
+* Isolated failure domains
+* Policy-driven governance
+* Security-first orchestration
+* Runtime trust boundaries
+
+---
+
+# 🛡️ Threat Model
+
+DBBKP assumes:
+
+* Tenant compromise is possible
+* Runtime workloads may become malicious
+* Infrastructure drift will occur
+* Shell execution is hostile by default
+* Nodes may become partially degraded
+* Insider threats are possible
+* Public-facing workloads are high risk
+
+The platform therefore implements:
+
+* Runtime isolation
+* Execution brokerage
+* Multi-tenant ownership validation
+* Security posture enforcement
+* Forensic traceability
+* EDR-lite detection
+* Drift reconciliation
+* Risk-based remediation
+
+---
+
+# 🔥 Next Evolution Roadmap
+
+# Phase 5 — Distributed Reliability Layer
+
+## Goal
+
+Transform DBBKP into a fully self-healing distributed orchestration engine.
+
+---
+
+## 5.1 Unified Event Bus
+
+### Current Problem
+
+Events are fragmented across:
+
+* logs
+* alerts
+* metrics
+* deployments
+* remediation
+* terminal sessions
+
+### Planned Solution
+
+Introduce a centralized immutable event system.
+
+### Planned Features
+
+* Unified PlatformEvent schema
+* Event persistence
+* Replay engine
+* Event subscriptions
+* Incident timelines
+* Cross-node correlation
+* SIEM integrations
+* Stream processing
+* Event search indexing
+
+### Target Architecture
+
+```txt
+Agents → Event Bus → Reconciliation → Dashboard → Analytics
+```
+
+---
+
+## 5.2 Cluster Scheduling Engine
+
+### Goal
+
+Move from direct deployments to intelligent workload placement.
+
+### Planned Features
+
+* Multi-node placement engine
+* Resource-aware scheduling
+* Affinity / anti-affinity rules
+* Capacity balancing
+* Node labels
+* Region-aware placement
+* Runtime migration
+* Maintenance draining
+
+---
+
+## 5.3 Agent Trust Infrastructure
+
+### Goal
+
+Establish cryptographic node trust boundaries.
+
+### Planned Features
+
+* Agent certificates
+* Mutual TLS
+* Node attestation
+* Secure enrollment
+* Token rotation
+* Trust revocation
+* Node identity lifecycle
+* Secure bootstrap flow
+
+---
+
+## 5.4 Immutable Evidence Store
+
+### Goal
+
+Provide enterprise-grade forensic integrity.
+
+### Planned Features
+
+* Append-only evidence logs
+* Signed audit records
+* Tamper detection
+* Immutable PTY recordings
+* Evidence export bundles
+* Incident snapshot generation
+* Chain-of-custody tracking
+
+---
+
+# ⚡ Phase 6 — Enterprise Governance
+
+## 6.1 Capability-Based Licensing
+
+### Goal
+
+Enable modular Pro and Enterprise features.
+
+### Planned Features
+
+* Capability flags
+* License validation
+* Module activation
+* SaaS plan enforcement
+* Feature entitlements
+* Offline license validation
+* Enterprise unlock system
+
+### Example
+
+```json
+{
+  "advanced_edr": true,
+  "multi_cluster": true,
+  "enterprise_rbac": true,
+  "sso": false
+}
+```
+
+---
+
+## 6.2 Identity & Enterprise Access
+
+### Planned Features
+
+* SSO / SAML
+* OAuth enterprise providers
+* SCIM provisioning
+* Organization hierarchy
+* Workspace isolation
+* Delegated administration
+* Approval workflows
+* Access reviews
+
+---
+
+## 6.3 Compliance & Governance
+
+### Planned Features
+
+* Compliance exports
+* CIS benchmark validation
+* PCI-DSS posture packs
+* SOC2 evidence collection
+* Compliance drift reports
+* Governance timelines
+
+---
+
+# 🌐 Phase 7 — Network & Runtime Mesh
+
+## Goal
+
+Build secure distributed infrastructure networking.
+
+---
+
+## Planned Features
+
+* Service discovery
+* Overlay networking
+* Internal encrypted mesh
+* Workload identity
+* Internal DNS engine
+* Runtime network policies
+* Egress governance
+* Distributed ingress control
+
+---
+
+# ☁️ Phase 8 — Storage & Backup Fabric
+
+## Planned Features
+
+* Distributed snapshot engine
+* Incremental backups
+* Object storage support
+* S3-compatible providers
+* Cross-node replication
+* Restore orchestration
+* Stateful workload migration
+
+---
+
+# 🤖 Phase 9 — Autonomous Infrastructure Intelligence
+
+## Goal
+
+Introduce intelligent infrastructure behavior analysis.
+
+---
+
+## Planned Features
+
+* Anomaly detection
+* Runtime behavioral baselines
+* Risk prediction
+* Smart remediation suggestions
+* Auto-scaling heuristics
+* Security anomaly clustering
+* AI-assisted incident triage
+* Predictive capacity planning
+
+---
+
+# 🏢 Deployment Profiles
+
+DBBKP will support multiple operational modes.
+
+| Profile        | Description                   |
+| -------------- | ----------------------------- |
+| shared-host    | Coexist with CyberPanel/Plesk |
+| dedicated-node | Full node ownership           |
+| edge-node      | Lightweight remote agent      |
+| enterprise     | Strict governance             |
+| lab/dev        | Relaxed policies              |
+
+---
+
+# 🔐 Security Levels
+
+| Level       | Description               |
+| ----------- | ------------------------- |
+| development | Minimal restrictions      |
+| hosting     | Shared-host safe defaults |
+| hardened    | Production-grade posture  |
+| paranoid    | Zero-trust enforcement    |
+
+---
+
+# 🧩 Planned Internal Domains
+
+To prevent monolith growth, DBBKP will evolve into domain-separated modules.
+
+| Domain        | Responsibility       |
+| ------------- | -------------------- |
+| orchestration | Deployments          |
+| runtime       | Containers           |
+| governance    | Policies             |
+| identity      | RBAC/Auth            |
+| security      | EDR/FIM              |
+| compliance    | Hardening            |
+| observability | Metrics/Logs         |
+| networking    | DNS/Mesh             |
+| platform      | Nodes/Reconciliation |
+
+---
+
+# 🧱 Reliability Philosophy
+
+DBBKP is designed around:
+
+* eventual consistency
+* reconciliation loops
+* autonomous healing
+* failure isolation
+* immutable auditing
+* replayable events
+* policy-driven remediation
+* secure execution boundaries
+
+---
+
+# 🎯 Strategic Positioning
+
+DBBKP is NOT:
+
+* just a hosting panel
+* just a PaaS
+* just an EDR
+* just a deployment tool
+
+DBBKP is becoming:
+
+```txt
+A Secure Self-Healing Infrastructure Operating System
+```
+
+combining:
+
+* PaaS orchestration
+* Runtime governance
+* Distributed security
+* Infrastructure compliance
+* Autonomous remediation
+* Multi-tenant isolation
+* Distributed observability
+
+into a unified distributed control plane.
+
+---
+
+# 🏁 Long-Term Objective
+
+Create a platform capable of managing:
+
+* distributed nodes
+* workloads
+* infrastructure security
+* runtime governance
+* compliance posture
+* operational reliability
+
+from a single secure control plane.
+
+---
+
+*Last Updated: 2026-05-07*

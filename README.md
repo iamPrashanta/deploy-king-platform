@@ -1,488 +1,119 @@
-# 🚀 DBBKP Platform — Infrastructure Orchestration + PaaS Control Plane
+# 🛡️ DBBKP — Distributed Infrastructure Control Plane
 
-A **distributed infrastructure orchestration, security automation, and deployment platform** that acts as a unified control plane for managing servers at scale.
+DBBKP is a **Secure Infrastructure Operating System** and **Distributed Control Plane** designed to automate orchestration, security hardening, and self-healing deployments across a fleet of heterogeneous nodes.
 
-It combines:
-
-* ⚙️ Autonomous security + backup agents
-* 🧠 Event-driven control plane (Node.js + Redis + Workers)
-* 🌐 PaaS deployment engine (pipelines + containers)
-* 📊 Centralized dashboard (Next.js)
-
-👉 This is not just a hosting panel — it is a **programmable DevOps control plane**.
+Unlike traditional hosting panels, DBBKP implements a **Desired State Reconciliation** architecture (similar to Kubernetes) to ensure that your infrastructure, security posture, and runtime workloads are always compliant with your defined policies.
 
 ---
 
-# 🏗️ Architecture Overview
+## 🏛️ Core Architecture
 
-The platform follows a **decoupled, event-driven push architecture**, ensuring:
+The platform is divided into distinct planes to ensure reliability, security, and scalability:
 
-* No cascading failures
-* High concurrency handling
-* Autonomous node behavior
-* Central orchestration without tight coupling
-
----
-
-## 1. 🛰️ Autonomous Agents (Server Layer)
-
-Lightweight Bash agents run via `cron` on each server.
-
-### 🔐 `infra-agent.sh` (Security Engine)
-
-* Malware detection (PHP shells, backdoors)
-* Risk scoring system
-* Auto firewall blocking (`ufw`)
-* File quarantine (`/var/quarantine`)
-* Permission enforcement
-* Attack surface analysis
-* Pushes structured JSON → Redis
+*   **Control Plane**: API, UI, and RBAC engine (Node.js + tRPC).
+*   **Execution Plane**: Policy-driven command execution via the **Execution Broker**.
+*   **Security Plane**: Real-time EDR, FIM, and behavioral anomaly detection.
+*   **Compliance Plane**: Desired state enforcement and remediation lifecycle.
+*   **Data Plane**: Hardened container runtimes and isolated tenant workloads.
 
 ---
 
-### 💾 `dbbkp.sh` (Backup Engine)
+## ⚡ Key Architectural Features
 
-* MySQL / MariaDB backups
-* Filesystem snapshots (tarballs)
-* Remote backup streaming
-* Disaster recovery ready
-* Can run standalone or headless
+### 🔄 Desired State Reconciliation
+The platform continuously monitors the delta between your **Desired State** (defined in the DB) and the **Observed State** (reported by agents).
+- **Self-Healing**: If a container crashes or is deleted, the reconciler automatically restores it.
+- **Security Drift**: If a system configuration (like `sshd_config`) is changed manually, the system detects the drift and triggers a remediation plan.
 
----
+### 🛡️ Execution Broker
+All infrastructure mutations flow through a centralized **Execution Broker**. 
+- **Intent Validation**: No command is trusted implicitly. Every execution must declare a structured "Intent" (actor, tenant, command class).
+- **Hardened Decision Point**: Validates commands against multi-tenant boundaries and security policies before execution.
+- **Audit Correlation**: Links every shell command to a specific user session and trace ID for forensic auditability.
 
-## 2. 🧠 Control Plane (Node.js)
-
-Located in:
-
-```
-apps/api
-apps/worker
-```
-
----
-
-### ⚡ API Layer (`apps/api`)
-
-* tRPC backend
-* Auth + session management
-* Node + pipeline management
-* Internal secure endpoints
+### 📦 Runtime Isolation & Quotas
+Every deployed workload is isolated using hardened container policies:
+- **Resource Quotas**: Enforced via cgroups (CPU shares, Memory limits).
+- **Fork-Bomb Protection**: Strict `pids-limit` enforcement.
+- **Hardened Security**: `no-new-privileges`, non-root execution, and read-only filesystem policies.
+- **Network Isolation**: Egress filtering and outbound telemetry tracking.
 
 ---
 
-### ⚙️ Worker (`apps/worker`)
+## 🔍 Security Plane (EDR & Posture)
 
-* BullMQ-based async processor
-* Consumes Redis events (`infra:events`)
-* Handles:
+DBBKP includes a distributed security subsystem that provides deep infrastructure visibility:
 
-  * Backup triggers
-  * Security responses
-  * CI/CD pipelines
-
----
-
-### 🔄 Event Flow Example
-
-```
-infra-agent detects HIGH_RISK
-        ↓
-Push → Redis (infra:events)
-        ↓
-Worker consumes (BLPOP)
-        ↓
-Rate-limit + idempotency (SHA-1 hashing)
-        ↓
-Trigger dbbkp (headless backup)
-        ↓
-Proceed with remediation
-```
+- **EDR-Lite**: Real-time process ancestry tracking and behavioral anomaly detection.
+- **File Integrity (FIM)**: SHA-256 hashing and entropy analysis to detect web-shells and PHP malware.
+- **Network Telemetry**: Ingestion of outbound connections, DNS requests, and risk-based ASN/Geo tracking.
+- **Posture Scoring**: Continuous assessment of host security (SSH, Firewall, Users) against a hardened baseline.
 
 ---
 
-## 3. 🌐 Frontend Layer
+## 🏢 Compliance & Hardening
 
-### 🖥️ Panel (`apps/panel`)
+Move from "settings" to "policy-driven" governance.
 
-* Next.js 15
-* Admin dashboard
-* Node monitoring
-* Security insights
-* Quarantine review system
+### Security Modes
+- **Monitor**: Detect drift and alert only.
+- **Guided**: Generate remediation plans for manual approval.
+- **Enforce**: Automatically remediate configuration drift.
+- **Locked**: Strict, immutable hardened baseline enforcement.
 
----
-
-### 🌍 Web (`apps/web`)
-
-* Optional Vite-based frontend
-* Lightweight UI layer
+### Policy Packs
+Deploy pre-bundled security baselines like **Ubuntu Hardened** or **Hosting Safe Mode** across your fleet with a single click.
 
 ---
 
-## 4. 🗄️ Database Layer
-
-Located in:
-
-```
-packages/db
-```
-
-* PostgreSQL
-* Drizzle ORM
-* Versioned migrations
-* Seeded admin system
+## 👥 Multi-Tenant Security
+- **RBAC Engine**: Granular permission model for developers, admins, and auditors.
+- **PTY Auditing**: Every terminal session is recorded, linked to a tenant, and audited for dangerous commands.
+- **Ownership Validation**: Strict mapping between containers, volumes, and user IDs.
 
 ---
 
-## 5. 🧩 Runner Layer
+## 🛠️ Technical Stack
 
-Located in:
-
-```
-packages/runner
-```
-
-* Executes Bash agents
-* Resolves script paths dynamically
-* Supports dev + production environments
+- **Backend**: Node.js, tRPC, BullMQ (Async Workers).
+- **Frontend**: Next.js 15, xterm.js (Terminal), High-performance WebSockets.
+- **Agent**: High-performance Go agent + Autonomous Bash scripts.
+- **Storage**: PostgreSQL (Drizzle ORM), Redis (Event Bus).
+- **Infrastructure**: Docker Engine, UFW, Systemd.
 
 ---
 
-# 📦 Monorepo Structure
+## 🚀 Getting Started
 
-```
-apps/
-  api/        → backend (tRPC)
-  worker/     → async job runner
-  panel/      → Next.js admin UI
-  web/        → Vite frontend
-
-packages/
-  db/         → schema + migrations + seed
-  runner/     → script execution engine
-
-scripts/
-  infra-agent.sh
-  dbbkp.sh
-```
-
----
-
-# 🔄 Agent Sync System (Zero Manual Updates)
-
-Agents are always kept up-to-date automatically.
-
-### How it works
-
-During:
-
+### 1. Install Dependencies
 ```bash
 pnpm install
 ```
 
-A `postinstall` hook runs:
+### 2. Configure Environment
+Create a `.env` file based on `.env.example`.
 
-```
-sync-scripts.js
-```
-
-It:
-
-* Fetches latest scripts from GitHub (`main` branch)
-* Updates:
-
-  * `infra-agent.sh`
-  * `dbbkp.sh`
-* Stores them in `/scripts`
-
----
-
-### Runtime Resolution
-
-`@dbbkp/runner` uses:
-
-```
-resolveScriptPath()
-```
-
-So your app:
-
-* Always executes latest scripts
-* Works in both local + production environments
-* Requires zero manual sync
-
----
-
-# ⚙️ Setup (Local Development)
-
----
-
-## 1. Install dependencies
-
+### 3. Setup Database
 ```bash
-pnpm install
+pnpm db:generate
+pnpm db:migrate
+pnpm db:seed
 ```
 
----
-
-## 2. Configure environment
-
-Create `.env`:
-
-```env
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/dbbkp_panel
-
-JWT_SECRET=your-secret
-API_PORT=4000
-
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-```
-
----
-
-## 3. Setup Database (IMPORTANT)
-
-```bash
-export $(grep -v '^#' .env | xargs)
-```
-
----
-
-### Generate migrations
-
-```bash
-pnpm --filter @dbbkp/db db:generate
-```
-
----
-
-### Apply migrations
-
-```bash
-pnpm --filter @dbbkp/db db:migrate
-```
-
----
-
-### Seed admin
-
-```bash
-pnpm --filter @dbbkp/db db:seed
-```
-
----
-
-## 4. Start platform
-
+### 4. Start Control Plane
 ```bash
 pnpm dev
 ```
 
 ---
 
-# 🔐 Default Admin Access
+## 🏁 Summary
 
-```
-Username: admin
-Password: admin123
-```
+DBBKP is built for organizations that need more than a panel—they need a **Secure Infrastructure Operating System**.
 
----
+*   **PaaS Capability**: Like Coolify / Dokploy.
+*   **Security Automation**: Like EDR / Host Hardening.
+*   **Self-Healing**: Like Kubernetes.
+*   **Unified Visibility**: Like Datadog.
 
-# 🔁 Development Utilities
-
-### Clean restart
-
-```bash
-pnpm dev:clean
-```
-
----
-
-### Kill processes
-
-```bash
-pkill -9 node
-```
-
----
-
-# 🚀 PaaS Deployment Engine (Pipelines)
-
-Deploy applications using:
-
-* Git repositories
-* Custom build commands
-* Containerized environments
-
----
-
-## Example Pipeline
-
-```
-Name: express-app
-Repo: https://github.com/expressjs/express
-Branch: master
-
-Build: npm install
-Deploy: node examples/hello-world/index.js
-```
-
----
-
-## Pipeline Flow
-
-```
-Git Clone
-   ↓
-Docker Build Environment
-   ↓
-Run Build Command
-   ↓
-Run Deploy Command
-   ↓
-Expose via Port
-```
-
----
-
-# 🔐 Security Design
-
-* Server-side session validation
-* Sliding inactivity timeout (30 min)
-* Redis-based event isolation
-* Internal API secured via `INTERNAL_SECRET`
-* No client-trust model
-
----
-
-# 🧱 Production Storage Layout
-
-```
-/var/www/
-  ├── panel/        → control plane
-  ├── sites/        → deployed apps
-  ├── pipeline/     → build artifacts
-  └── backups/      → dbbkp outputs
-```
-
----
-
-# ⚠️ Common Issues
-
----
-
-## Database errors
-
-```
-relation does not exist
-```
-
-Fix:
-
-```bash
-pnpm --filter @dbbkp/db db:migrate
-```
-
----
-
-## Postgres role error
-
-```
-role "user" does not exist
-```
-
-Fix:
-
-```bash
-sudo -u postgres psql
-CREATE ROLE postgres WITH LOGIN PASSWORD 'postgres';
-ALTER ROLE postgres CREATEDB;
-```
-
----
-
-## Docker permission issues
-
-* Use Docker volumes
-* Avoid OneDrive mounts
-
----
-
-## Port conflicts
-
-```bash
-lsof -i :3000
-lsof -i :4000
-```
-
----
-
-# 🔮 Roadmap
-
-### Phase 1 — Scale Control Plane
-
-* Multi-node aggregation API
-* Centralized monitoring dashboard
-
----
-
-### Phase 2 — Smart Infrastructure
-
-* Memory + CPU anomaly detection
-* Auto firewall lockdown (`ufw`, `fail2ban`)
-* AI-based diagnostics engine
-
----
-
-### Phase 3 — Full PaaS
-
-* One-click deployments:
-
-  * WordPress
-  * Next.js
-  * Laravel
-* Auto SSL provisioning (Let's Encrypt)
-* Reverse proxy automation
-
----
-
-### Phase 4 — Advanced Ops
-
-* Full stack migration engine
-* Cross-node restore system
-* Role-based quarantine audits
-
----
-
-# 🏁 Summary
-
-This platform combines:
-
-* Hosting Panel → like CyberPanel / Plesk
-* PaaS → like Coolify / Dokploy
-* Security Automation → infra-agent
-* Backup Engine → dbbkp
-
-👉 Result: **A unified DevOps control plane for infrastructure at scale**
-
----
-
-# ⚡ Pro Tip
-
-Add shortcuts:
-
-```json
-"scripts": {
-  "db:generate": "pnpm --filter @dbbkp/db db:generate",
-  "db:migrate": "pnpm --filter @dbbkp/db db:migrate",
-  "db:seed": "pnpm --filter @dbbkp/db db:seed"
-}
-```
-
-Then:
-
-```bash
-pnpm db:migrate
-```
+👉 Result: **A unified, secure, and self-healing control plane for distributed infrastructure.**
