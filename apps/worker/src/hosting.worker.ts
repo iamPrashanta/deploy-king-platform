@@ -274,20 +274,17 @@ export const hostingWorker = new Worker(
           HostConfig: {
             Binds: [`${docRoot}:/usr/share/nginx/html:ro`],
             RestartPolicy: { Name: "always" },
+            Memory: 128 * 1024 * 1024,
+            CpuQuota: 20000,
+            PidsLimit: 50,
           },
+          
           Labels: {
             "traefik.enable": "true",
             [`traefik.http.routers.site-${safeDomainName}.rule`]: `Host(\`${domain}\`)`,
             [`traefik.http.routers.site-${safeDomainName}.entrypoints`]: "websecure",
             [`traefik.http.routers.site-${safeDomainName}.tls.certresolver`]: "letsencrypt",
             [`traefik.http.services.site-${safeDomainName}.loadbalancer.server.port`]: "80",
-          },
-          HostConfig: {
-            Binds: [`${docRoot}:/usr/share/nginx/html:ro`],
-            RestartPolicy: { Name: "always" },
-            Memory: 128 * 1024 * 1024, // Static sites get lower quota
-            CpuQuota: 20000,
-            PidsLimit: 50,
           },
         });
         await staticContainer.start();
