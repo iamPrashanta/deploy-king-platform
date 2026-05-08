@@ -113,7 +113,14 @@ export const authRouter = router({
         .where(eq(users.id, ctx.user.sub));
 
       // 2. Security Audit
+      // await db.insert(auditLogs).values(assertClean({
+      //   type: "security",
+      //   userId: ctx.user.sub,
+      //   event: "Password changed via dashboard. Mandatory rotation complete.",
+      //   ip: ctx.ip,
+      // }));
       await db.insert(auditLogs).values(assertClean({
+        action: "password_changed",
         type: "security",
         userId: ctx.user.sub,
         event: "Password changed via dashboard. Mandatory rotation complete.",
