@@ -10,7 +10,7 @@ import { filesRouter } from "./routers/files.router";
 import { auditRouter, secretsRouter } from "./routers/audit.router";
 import { nodesRouter } from "./routers/nodes.router";
 import { securityRouter } from "./routers/security.router";
-import { pipelineRouter } from "./routers/pipelines.router";
+import { pipelineRouter } from "./routers/pipeline.router";
 
 export const appRouter = router({
   auth: authRouter,
