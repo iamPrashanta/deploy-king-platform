@@ -11,6 +11,9 @@ import { auditRouter, secretsRouter } from "./routers/audit.router";
 import { nodesRouter } from "./routers/nodes.router";
 import { securityRouter } from "./routers/security.router";
 import { pipelineRouter } from "./routers/pipeline.router";
+import { gitRouter } from "./routers/git.router";
+import { systemRouter } from "./routers/system.router";
+import { automationsRouter } from "./routers/automations.router";
 
 export const appRouter = router({
   auth: authRouter,
@@ -25,6 +28,9 @@ export const appRouter = router({
   secrets: secretsRouter,
   nodes: nodesRouter,
   security: securityRouter,
+  git: gitRouter,
+  system: systemRouter,
+  automations: automationsRouter,
 });
 
 export type AppRouter = typeof appRouter;

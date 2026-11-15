@@ -1,12 +1,12 @@
 services:
   dbbkp-traefik:
-    image: traefik:v3.0
+    image: traefik:v3
     container_name: dbbkp-traefik
     restart: unless-stopped
     command:
-      - "--api.insecure=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=dbbkp"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
@@ -15,12 +15,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      # Only expose panel via traefik routing or optionally map directly if requested
-      - "8443:8443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data/letsencrypt:/letsencrypt
-      - /opt/dbbkp/traefik/rules:/etc/traefik/rules
     networks:
       - dbbkp
 
@@ -62,6 +59,11 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@dbbkp-redis:6379
       - INTERNAL_SECRET=${INTERNAL_SECRET}
       - MASTER_KEY=${MASTER_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+      - API_INTERNAL_URL=http://dbbkp-api:4000
+      - DBBKP_NETWORK=dbbkp
+      - DBBKP_TLS=true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/www/sites:/var/www/sites
@@ -70,7 +72,9 @@ services:
       - dbbkp
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`, `/trpc`, `/webhooks`, `/internal`)"
+      - "traefik.http.routers.api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/trpc`) || PathPrefix(`/webhooks`) || PathPrefix(`/ws`))"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
       - "traefik.http.services.api.loadbalancer.server.port=4000"
 
   dbbkp-worker:
@@ -88,6 +92,11 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@dbbkp-redis:6379
       - INTERNAL_SECRET=${INTERNAL_SECRET}
       - MASTER_KEY=${MASTER_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+      - API_INTERNAL_URL=http://dbbkp-api:4000
+      - DBBKP_NETWORK=dbbkp
+      - DBBKP_TLS=true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/www/sites:/var/www/sites
@@ -128,8 +137,12 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.panel.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.panel.entrypoints=websecure"
+      - "traefik.http.routers.panel.tls.certresolver=letsencrypt"
       - "traefik.http.services.panel.loadbalancer.server.port=3000"
 
 networks:
   dbbkp:
+    # Fixed name: the worker attaches every site container to this network by name.
+    name: dbbkp
     driver: bridge

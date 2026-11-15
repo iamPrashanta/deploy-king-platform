@@ -8,6 +8,7 @@ import {
   integer,
   jsonb,
   primaryKey,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 // ─── USERS ───────────────────────────────────────────────────────────────────
@@ -19,6 +20,7 @@ export const users = pgTable("users", {
   role: varchar("role", { length: 20 }).notNull().default("user"), // admin | user
   mustChangePassword: boolean("must_change_password").default(false),
   createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // ─── SESSIONS (Auth & Activity) ─────────────────────────────────────────────
@@ -88,21 +90,46 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   durationMs: integer("duration_ms"),
 });
 
+// ─── GIT PROVIDERS ────────────────────────────────────────────────────────────
+// A connected GitHub account. The token lets the panel list repositories and
+// branches and lets the worker clone private repositories. Stored encrypted.
+export const gitProviders = pgTable("git_providers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  type: varchar("type", { length: 20 }).notNull().default("github"),
+  name: varchar("name", { length: 100 }).notNull(),
+  login: varchar("login", { length: 100 }),
+  avatarUrl: text("avatar_url"),
+  encryptedToken: text("encrypted_token").notNull(),
+  iv: varchar("iv", { length: 64 }).notNull(),
+  authTag: varchar("auth_tag", { length: 64 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type SiteVolume = { name: string; mountPath: string };
+
 // ─── SITES ────────────────────────────────────────────────────────────────────
 export const sites = pgTable("sites", {
   id: uuid("id").defaultRandom().primaryKey(),
+  // Owner of the site. Every ownership check in the API, gateway and worker keys on this.
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   domain: varchar("domain", { length: 255 }).notNull().unique(),
   type: varchar("type", { length: 20 }).notNull().default("static"),
   docRoot: text("doc_root").notNull(),
   port: integer("port"),
   pm2Name: varchar("pm2_name", { length: 100 }),
-  source: varchar("source", { length: 20 }).notNull().default("zip"),
+  source: varchar("source", { length: 20 }).notNull().default("zip"), // git | zip | image
   repoUrl: text("repo_url"),
+  gitProviderId: uuid("git_provider_id").references(() => gitProviders.id, { onDelete: "set null" }),
+  image: text("image"), // for source = image, e.g. "n8nio/n8n:latest"
+  volumes: jsonb("volumes").$type<SiteVolume[]>().default([]),
+  autoDeploy: boolean("auto_deploy").default(true),
   branch: varchar("branch", { length: 100 }).default("main"),
   buildCommand: text("build_command"),
   startCommand: text("start_command"),
   status: varchar("status", { length: 20 }).notNull().default("pending"),
   phpVersion: varchar("php_version", { length: 10 }).default("8.2"),
+  nodeVersion: varchar("node_version", { length: 10 }), // overrides package.json engines; set from a mid-deploy answer
   sslEnabled: boolean("ssl_enabled").default(false),
   sslExpiry: timestamp("ssl_expiry"),
   nginxConfig: text("nginx_config"),
@@ -128,6 +155,62 @@ export const sites = pgTable("sites", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// ─── DEPLOYMENTS ──────────────────────────────────────────────────────────────
+// One row per deploy attempt. Gives the UI real history, build logs and a
+// rollback target (the image tag) without anyone having to remember a SHA.
+export const deployments = pgTable("deployments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  siteId: uuid("site_id").notNull().references(() => sites.id, { onDelete: "cascade" }),
+  // queued | building | starting | waiting_input | active | failed | superseded
+  status: varchar("status", { length: 20 }).notNull().default("queued"),
+  // manual | webhook | rollback | reconcile | preview
+  trigger: varchar("trigger", { length: 20 }).notNull().default("manual"),
+  runtime: varchar("runtime", { length: 30 }), // what was actually built (detected when site.type = auto)
+  commitSha: varchar("commit_sha", { length: 64 }),
+  commitMessage: text("commit_message"),
+  imageTag: varchar("image_tag", { length: 255 }),
+  port: integer("port"), // port the image serves on; needed to run it again on rollback
+  containerName: varchar("container_name", { length: 128 }),
+  log: text("log"),
+  error: text("error"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow(),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+  durationMs: integer("duration_ms"),
+  // A question the running deploy is waiting on (status = waiting_input), and the answers given so far.
+  prompt: jsonb("prompt").$type<DeployPrompt | null>(),
+  answers: jsonb("answers").$type<Record<string, string>>().default({}),
+});
+
+export type DeployPromptOption = { value: string; label: string; detail?: string };
+export type DeployPrompt = {
+  id: string;
+  kind: "confirm" | "select";
+  title: string;
+  detail?: string;
+  options?: DeployPromptOption[];
+  default: string;
+  askedAt: string;
+  expiresAt: string;
+};
+
+// ─── SITE ENVIRONMENT VARIABLES ──────────────────────────────────────────────
+// Encrypted at rest with the platform MASTER_KEY (AES-256-GCM), injected into
+// the site container at deploy time.
+export const siteEnvVars = pgTable("site_env_vars", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  siteId: uuid("site_id").notNull().references(() => sites.id, { onDelete: "cascade" }),
+  key: varchar("key", { length: 255 }).notNull(),
+  encryptedValue: text("encrypted_value").notNull(),
+  iv: varchar("iv", { length: 64 }).notNull(),
+  authTag: varchar("auth_tag", { length: 64 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => ({
+  siteKey: uniqueIndex("site_env_vars_site_key").on(t.siteId, t.key),
+}));
 
 // ─── DB INSTANCES ─────────────────────────────────────────────────────────────
 export const dbInstances = pgTable("db_instances", {
@@ -295,6 +378,7 @@ export const terminalSessions = pgTable("terminal_sessions", {
   idleTimeoutAt: timestamp("idle_timeout_at"),
   recording: text("recording"),
   startedAt: timestamp("started_at").defaultNow(),
+  lastActivityAt: timestamp("last_activity_at").defaultNow(),
   endedAt: timestamp("ended_at"),
 });
 
@@ -549,10 +633,63 @@ export const workflowSteps = pgTable("workflow_steps", {
   finishedAt: timestamp("finished_at"),
 });
 
+// ─── AUTOMATIONS (visual workflows) ───────────────────────────────────────────
+export type AutomationGraph = {
+  nodes: Array<{ id: string; type: string; position: { x: number; y: number }; data: Record<string, any> }>;
+  edges: Array<{ id: string; source: string; target: string; sourceHandle?: string | null }>;
+};
+
+export type AutomationStep = {
+  status: "running" | "success" | "failed" | "skipped";
+  startedAt: string;
+  durationMs?: number;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  branch?: string;
+  attempts?: number;
+};
+
+export const automations = pgTable("automations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 255 }).notNull(),
+  description: text("description"),
+  enabled: boolean("enabled").notNull().default(false),
+  graph: jsonb("graph").$type<AutomationGraph>().notNull(),
+  // Derived from the graph's trigger node on save, so triggers can be looked up without parsing graphs.
+  triggerType: varchar("trigger_type", { length: 30 }).notNull().default("manual"), // manual | schedule | webhook | deployment
+  schedule: varchar("schedule", { length: 100 }),
+  webhookToken: varchar("webhook_token", { length: 64 }).unique(),
+  lastRunAt: timestamp("last_run_at"),
+  lastRunStatus: varchar("last_run_status", { length: 20 }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const automationRuns = pgTable("automation_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  automationId: uuid("automation_id").notNull().references(() => automations.id, { onDelete: "cascade" }),
+  status: varchar("status", { length: 20 }).notNull().default("queued"), // queued | running | success | failed
+  trigger: varchar("trigger", { length: 30 }).notNull().default("manual"),
+  input: jsonb("input"),
+  steps: jsonb("steps").$type<Record<string, AutomationStep>>().default({}),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+  durationMs: integer("duration_ms"),
+});
+
 // ─── EXPORTS ──────────────────────────────────────────────────────────────────
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Site = typeof sites.$inferSelect;
+export type Deployment = typeof deployments.$inferSelect;
+export type GitProvider = typeof gitProviders.$inferSelect;
+export type Automation = typeof automations.$inferSelect;
+export type AutomationRun = typeof automationRuns.$inferSelect;
+export type SiteEnvVar = typeof siteEnvVars.$inferSelect;
 export type Pipeline = typeof pipelines.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type Secret = typeof secrets.$inferSelect;

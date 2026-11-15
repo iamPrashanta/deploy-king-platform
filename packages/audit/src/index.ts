@@ -26,7 +26,9 @@ export type AuditAction =
   | "threat_detected"
   | "threat_resolved"
   | "user_create"
-  | "user_delete";
+  | "user_delete"
+  | "intent_authorized"
+  | "intent_denied";
 
 export interface AuditContext {
   /** UUID of the user performing the action */

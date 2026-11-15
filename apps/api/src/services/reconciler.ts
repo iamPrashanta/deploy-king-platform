@@ -1,55 +1,44 @@
 import { db, sites } from "@dbbkp/db";
-import { eq, and, sql } from "drizzle-orm";
-import { hostingQueue } from "../queues";
+import { eq } from "drizzle-orm";
 import Docker from "dockerode";
+import { enqueueDeploy } from "./deploy";
 
 const docker = new Docker();
 
+const INTERVAL_MS = Number(process.env.RECONCILE_INTERVAL_MS || 5 * 60_000);
+
 /**
  * Platform Reconciliation Engine
- * 
- * Ensures "Desired State" (DB) matches "Actual State" (Infrastructure).
- * Detects drifted or crashed sites and triggers recovery jobs.
+ *
+ * Ensures "desired state" (DB) matches "actual state" (the container runtime).
+ * A site that should be active but has no running container is restarted from
+ * its last good image - no rebuild - and gets a deployment row saying why.
  */
-export function startReconciliationLoop() {
-  console.log("[Reconciler] Starting Platform Reconciliation Loop (interval: 15m)");
+export async function reconcileOnce() {
+  const activeSites = await db.select().from(sites).where(eq(sites.desiredStatus, "active"));
+  if (activeSites.length === 0) return { checked: 0, recovered: 0 };
 
-  setInterval(async () => {
-    try {
-      // 1. Find sites that should be "active" but might be crashed/missing
-      const activeSites = await db
-        .select()
-        .from(sites)
-        .where(eq(sites.desiredStatus, "active"));
+  // Site containers carry a dbbkp.site=<siteId> label, so we do not depend on naming.
+  const running = await docker.listContainers({ filters: { label: ["dbbkp.site"], status: ["running"] } });
+  const runningSiteIds = new Set(running.map((c) => c.Labels?.["dbbkp.site"]).filter(Boolean));
 
-      if (activeSites.length === 0) return;
-
-      const containers = await docker.listContainers({ all: true });
-      const runningNames = containers.flatMap(c => c.Names);
-
-      for (const site of activeSites) {
-        const expectedName = `/dbbkp-site-${site.id.slice(0, 8)}`;
-        const isRunning = runningNames.includes(expectedName);
-
-        if (!isRunning && site.status === "active") {
-          console.warn(`[Reconciler] Drift detected: Site ${site.domain} is missing/crashed. Triggering recovery...`);
-          
-          // Update status to 'drifted' so UI reflects reality
-          await db.update(sites)
-            .set({ status: "drifted", lastReconciledAt: new Date() })
-            .where(eq(sites.id, site.id));
-
-          // Trigger re-deployment
-          await hostingQueue.add("deploy-site", { siteId: site.id });
-        } else {
-          // Update last reconciled timestamp
-          await db.update(sites)
-            .set({ lastReconciledAt: new Date() })
-            .where(eq(sites.id, site.id));
-        }
-      }
-    } catch (err) {
-      console.error("[Reconciler] Loop error:", err);
+  let recovered = 0;
+  for (const site of activeSites) {
+    if (site.status === "active" && !runningSiteIds.has(site.id)) {
+      console.warn(`[Reconciler] Drift: ${site.domain} should be running but is not. Recovering...`);
+      await db.update(sites).set({ status: "drifted", lastReconciledAt: new Date() }).where(eq(sites.id, site.id));
+      await enqueueDeploy(site.id, { trigger: "reconcile", reuseImage: true, createdBy: site.userId });
+      recovered += 1;
+    } else {
+      await db.update(sites).set({ lastReconciledAt: new Date() }).where(eq(sites.id, site.id));
     }
-  }, 15 * 60_000); // Every 15 minutes
+  }
+  return { checked: activeSites.length, recovered };
+}
+
+export function startReconciliationLoop() {
+  console.log(`[Reconciler] Starting Platform Reconciliation Loop (interval: ${Math.round(INTERVAL_MS / 1000)}s)`);
+  setInterval(() => {
+    reconcileOnce().catch((err) => console.error("[Reconciler] Loop error:", err));
+  }, INTERVAL_MS);
 }

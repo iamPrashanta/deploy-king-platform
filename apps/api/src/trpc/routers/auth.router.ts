@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import crypto from "node:crypto";
 
-const JWT_SECRET = process.env.JWT_SECRET || "dbbkp-super-secret-change-in-prod";
+import { JWT_SECRET } from "../../config";
 
 // ─── UTILITIES ───────────────────────────────────────────────────────────────
 

@@ -3,88 +3,103 @@ import multer from "multer";
 import path from "path";
 import fs from "fs-extra";
 import crypto from "node:crypto";
-import { db, sites } from "@dbbkp/db";
-import { eq } from "drizzle-orm";
-import { getFreePort } from "../services/port-manager";
-import { hostingQueue } from "../queues";
-
 import os from "os";
+import AdmZip from "adm-zip";
+import { db, sites } from "@dbbkp/db";
+import { desc, eq } from "drizzle-orm";
+import { enqueueDeploy } from "../services/deploy";
+import { hasPermission, PERMISSIONS } from "../utils/rbac";
+import { isValidDomain, normalizeDomain, siteDocRoot } from "../services/validation";
+import type { AuthedUser } from "../middleware/requireAuth";
 
 const router = express.Router();
-const upload = multer({ dest: path.join(os.tmpdir(), "dbbkp-uploads") });
+const upload = multer({
+  dest: path.join(os.tmpdir(), "dbbkp-uploads"),
+  limits: { fileSize: 500 * 1024 * 1024, files: 1 },
+});
+
+const RUNTIMES = new Set(["auto", "static", "node", "python", "php", "go", "docker"]);
 
 // ─── POST /api/sites/upload ──────────────────────────────────────────────────
-// Auth disabled temporarily as requested for dev speed
+// ZIP deployments. This router is mounted behind requireAuth.
 router.post("/upload", upload.single("project"), async (req: any, res) => {
-  console.log("[Sites:Upload] Received upload request", req.body);
-  
-  try {
-    const { domain, type } = req.body;
-    const file = req.file;
+  const user: AuthedUser = req.user;
+  const file = req.file;
 
-    if (!domain) return res.status(400).json({ error: "Domain is required" });
+  try {
+    if (!(await hasPermission(user.sub, PERMISSIONS.SITE_CREATE))) {
+      return res.status(403).json({ error: `Missing required permission: ${PERMISSIONS.SITE_CREATE}` });
+    }
+
+    const domain = normalizeDomain(String(req.body.domain || ""));
+    const type = String(req.body.type || "auto");
+
+    if (!isValidDomain(domain)) return res.status(400).json({ error: "Domain must be a valid hostname" });
+    if (!RUNTIMES.has(type)) return res.status(400).json({ error: "Unknown runtime" });
     if (!file) return res.status(400).json({ error: "No file uploaded" });
 
-    const siteId = crypto.randomUUID();
-    const sitePath = `/var/www/sites/${siteId}`;
+    const [taken] = await db.select({ id: sites.id }).from(sites).where(eq(sites.domain, domain)).limit(1);
+    if (taken) return res.status(409).json({ error: `Domain ${domain} is already in use` });
 
-    console.log(`[Sites:Upload] Preparing site directory: ${sitePath}`);
+    const siteId = crypto.randomUUID();
+    const sitePath = siteDocRoot(siteId);
     await fs.ensureDir(sitePath);
 
-    // 1. Unzip
-    console.log(`[Sites:Upload] Extracting project files...`);
-    const AdmZip = require("adm-zip");
+    // Refuse archives with entries that would land outside the site directory.
     const zip = new AdmZip(file.path);
+    for (const entry of zip.getEntries()) {
+      const target = path.resolve(sitePath, entry.entryName);
+      if (target !== sitePath && !target.startsWith(sitePath + path.sep)) {
+        await fs.remove(sitePath);
+        return res.status(400).json({ error: "Archive contains an unsafe path" });
+      }
+    }
     zip.extractAllTo(sitePath, true);
 
-    // 2. Allocate Port
-    const port = type === "static" ? null : await getFreePort();
-    console.log(`[Sites:Upload] Allocated port: ${port}`);
+    // A ZIP of a folder usually wraps everything in one top-level directory; unwrap it.
+    const entries = (await fs.readdir(sitePath)).filter((n) => n !== "__MACOSX");
+    if (entries.length === 1 && (await fs.stat(path.join(sitePath, entries[0]))).isDirectory()) {
+      const inner = path.join(sitePath, entries[0]);
+      for (const name of await fs.readdir(inner)) {
+        await fs.move(path.join(inner, name), path.join(sitePath, name), { overwrite: true });
+      }
+      await fs.remove(inner);
+    }
 
-    // 3. Create site record
-    console.log(`[Sites:Upload] Inserting into DB...`);
     const [newSite] = await db
       .insert(sites)
       .values({
         id: siteId,
+        userId: user.sub,
         domain,
-        type: type || "static",
+        type,
         docRoot: sitePath,
-        port,
+        port: null,
         source: "zip",
         status: "provisioning",
       })
       .returning();
 
-    // 4. Cleanup temp file
-    await fs.remove(file.path);
+    const deployment = await enqueueDeploy(newSite.id, { trigger: "manual", createdBy: user.sub });
 
-    // 5. Enqueue deployment job
-    console.log(`[Sites:Upload] Enqueueing hosting job...`);
-    await hostingQueue.add("deploy-site", { 
-      siteId: newSite.id,
-      source: "zip"
-    });
-
-    return res.json({
-      success: true,
-      siteId: newSite.id,
-      domain,
-      runtime: type,
-      port
-    });
-
+    return res.json({ success: true, siteId: newSite.id, deploymentId: deployment.id, domain, runtime: type });
   } catch (err: any) {
     console.error("[Sites:Upload] FAILED:", err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: "Upload failed" });
+  } finally {
+    if (file?.path) await fs.remove(file.path).catch(() => {});
   }
 });
 
 // ─── GET /api/sites ──────────────────────────────────────────────────────────
-router.get("/", async (req, res) => {
+router.get("/", async (req: any, res) => {
   try {
-    const allSites = await db.select().from(sites);
-    return res.json(allSites);
+    const user: AuthedUser = req.user;
+    const rows =
+      user.role === "admin"
+        ? await db.select().from(sites).orderBy(desc(sites.createdAt))
+        : await db.select().from(sites).where(eq(sites.userId, user.sub)).orderBy(desc(sites.createdAt));
+    return res.json(rows);
   } catch (err) {
     return res.status(500).json({ error: "Internal server error" });
   }

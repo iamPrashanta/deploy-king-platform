@@ -6,6 +6,7 @@ import "./pipeline.worker";
 import "./hosting.worker";
 import "./database.worker";
 import "./cron.worker";
+import "./automation.worker";
 
 const scriptPath = resolveScriptPath("dbbkp.sh");
 

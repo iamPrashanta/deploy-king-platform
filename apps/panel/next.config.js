@@ -12,6 +12,16 @@ const nextConfig = {
         source: "/trpc/:path*",
         destination: "http://localhost:4000/trpc/:path*",
       },
+      {
+        // workflow trigger URLs
+        source: "/hooks/:path*",
+        destination: "http://localhost:4000/hooks/:path*",
+      },
+      {
+        // GitHub can reach the API through the panel's address
+        source: "/webhooks/:path*",
+        destination: "http://localhost:4000/webhooks/:path*",
+      },
     ];
   },
 };

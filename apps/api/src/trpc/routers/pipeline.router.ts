@@ -4,6 +4,7 @@ import { db, jobs, pipelines, pipelineRuns } from "@dbbkp/db";
 import { eq, sql } from "drizzle-orm";
 import { pipelineQueue } from "../../queues";
 import { TRPCError } from "@trpc/server";
+import { enqueuePipelineRun } from "../../services/pipelines";
 
 // ─── UTILITIES (HARDENED) ────────────────────────────────────────────────────
 
@@ -191,40 +192,7 @@ export const pipelineRouter = router({
       if (!p) throw new TRPCError({ code: "NOT_FOUND" });
       if (!p.enabled) throw new TRPCError({ code: "BAD_REQUEST", message: "Pipeline is disabled" });
 
-      // 1. Create a run record with absolute safety
-      const [run] = await db.insert(pipelineRuns).values(assertClean({
-        pipelineId: p.id,
-        status: "waiting",
-        runner: process.env.PIPELINE_ISOLATION ?? "docker",
-        image: process.env.PIPELINE_DOCKER_IMAGE ?? "node:20-bookworm",
-      })).returning();
-
-      // 2. Prepare payload
-      const runPayload = deepClean({
-        runId: run.id,
-        pipelineId: p.id,
-        repoUrl: p.repoUrl,
-        branch: p.branch ?? "main",
-        buildCommand: p.buildCommand ?? null,
-        deployCommand: p.deployCommand ?? null,
-        envVars: p.envVars ? JSON.parse(p.envVars) : {},
-      });
-
-      const [dbJob] = await db.insert(jobs).values(assertClean({
-        type: "pipeline",
-        name: p.name,
-        status: "waiting",
-        payload: JSON.stringify(runPayload),
-      })).returning();
-
-      // 3. Enqueue job
-      const job = await pipelineQueue.add("pipeline-run", { ...runPayload, dbJobId: dbJob.id });
-
-      // 4. Update bullJobId refs
-      await db.update(pipelineRuns).set({ bullJobId: String(job.id) }).where(eq(pipelineRuns.id, run.id));
-      await db.update(jobs).set({ bullJobId: String(job.id) }).where(eq(jobs.id, dbJob.id));
-
-      return { jobId: job.id, runId: run.id };
+      return enqueuePipelineRun(p);
     }),
 
   // ─── List Runs ─────────────────────────────────────────────────────────────

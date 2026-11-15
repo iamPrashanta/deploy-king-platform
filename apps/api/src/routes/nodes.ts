@@ -5,6 +5,7 @@ import { db, nodes, nodeMetrics } from "@dbbkp/db";
 import { eq, lt, sql } from "drizzle-orm";
 import { logAudit } from "@dbbkp/audit";
 import { broadcastMetrics } from "../ws/gateway";
+import { INTERNAL_SECRET, safeEqual } from "../config";
 
 const router = Router();
 
@@ -45,8 +46,7 @@ async function requireNodeToken(req: any, res: any, next: any) {
 // Requires the one-time INTERNAL_SECRET (bootstrap key), then returns a
 // permanent bearer token that is stored on-host at /etc/dbbkp-agent/token.
 router.post("/register", async (req, res) => {
-  const internalSecret = process.env.INTERNAL_SECRET || "dbbkp-internal-secret-change-me";
-  if (req.headers["x-internal-key"] !== internalSecret) {
+  if (!safeEqual(req.headers["x-internal-key"], INTERNAL_SECRET)) {
     console.warn(`[Nodes] Unauthorized registration attempt from ${req.ip}`);
     res.status(403).json({ error: "Invalid bootstrap key" });
     return;

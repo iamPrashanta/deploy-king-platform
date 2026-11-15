@@ -1,4 +1,6 @@
+import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
+import { db, securityPolicies, nodeHardeningState } from "@dbbkp/db";
 import { POSTURE_RISK_WEIGHTS, RULES } from "@dbbkp/utils";
 import { remediationEngine } from "./remediation-engine";
 import { TraceUtils } from "@dbbkp/utils";

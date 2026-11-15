@@ -2,142 +2,164 @@ import { Router } from "express";
 import crypto from "node:crypto";
 import { db, sites, pipelines } from "@dbbkp/db";
 import { eq } from "drizzle-orm";
-import { hostingQueue, pipelineQueue } from "../queues";
+import { hostingQueue } from "../queues";
+import { enqueueDeploy } from "../services/deploy";
+import { enqueuePipelineRun } from "../services/pipelines";
+import { normalizeRepoUrl, isValidBranch, siteDocRoot } from "../services/validation";
 
 const router = Router();
 
-// Helper to verify GitHub webhook signatures
-function verifyGitHubSignature(payload: string, signature: string, secret: string) {
-  const hmac = crypto.createHmac("sha256", secret);
-  hmac.update(payload);
-  const digest = `sha256=${hmac.digest("hex")}`;
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
+const PREVIEW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * GitHub signs the exact bytes it sent. We compare against the raw request
+ * body captured by express.json({ verify }) - never a re-serialised object.
+ */
+function verifyGitHubSignature(rawBody: Buffer, signature: string, secret: string): boolean {
+  const expected = Buffer.from(`sha256=${crypto.createHmac("sha256", secret).update(rawBody).digest("hex")}`);
+  const provided = Buffer.from(signature);
+  // timingSafeEqual throws on length mismatch; a malformed header is a 401, not a 500.
+  if (provided.length !== expected.length) return false;
+  return crypto.timingSafeEqual(provided, expected);
 }
 
 router.post("/github", async (req, res) => {
   try {
-    const signature = req.headers["x-hub-signature-256"] as string;
-    const event = req.headers["x-github-event"] as string;
+    const signature = req.headers["x-hub-signature-256"];
+    const event = req.headers["x-github-event"];
     const secret = process.env.GITHUB_WEBHOOK_SECRET;
 
-    if (!signature || !event) {
-      res.status(400).json({ error: "Missing signature or event" });
+    if (typeof event !== "string") {
+      res.status(400).json({ error: "Missing x-github-event header" });
       return;
     }
 
-    if (secret) {
-      const rawPayload = JSON.stringify(req.body);
-      if (!verifyGitHubSignature(rawPayload, signature, secret)) {
+    // Signature verification is mandatory. An unsigned endpoint lets anyone who
+    // knows a repository URL trigger deployments.
+    const allowUnsigned = process.env.ALLOW_UNSIGNED_WEBHOOKS === "true" && process.env.NODE_ENV !== "production";
+    if (!secret) {
+      if (!allowUnsigned) {
+        res.status(503).json({ error: "Webhooks are disabled: GITHUB_WEBHOOK_SECRET is not configured" });
+        return;
+      }
+      console.warn("[Webhook] ALLOW_UNSIGNED_WEBHOOKS=true - accepting an unsigned webhook (development only).");
+    } else {
+      const rawBody: Buffer | undefined = (req as any).rawBody;
+      if (typeof signature !== "string" || !rawBody || !verifyGitHubSignature(rawBody, signature, secret)) {
         res.status(401).json({ error: "Invalid signature" });
         return;
       }
     }
 
-    const payload = req.body;
-    
-    // Check if this repository is linked to any of our pipelines
-    const repoUrl = payload.repository?.clone_url || payload.repository?.html_url;
-    if (!repoUrl) {
+    if (event === "ping") {
+      res.json({ ok: true, pong: true });
+      return;
+    }
+
+    const payload = req.body ?? {};
+    const repoKey = normalizeRepoUrl(payload.repository?.clone_url || payload.repository?.html_url);
+    if (!repoKey) {
       res.status(400).json({ error: "No repository URL found in payload" });
       return;
     }
 
+    const triggered = { pipelines: 0, sites: 0, previews: 0 };
+
     if (event === "push") {
-      const branch = payload.ref?.replace("refs/heads/", "") || "main";
-      
-      // 1. Trigger Pipelines
-      const linkedPipelines = await db.select().from(pipelines).where(eq(pipelines.repoUrl, repoUrl));
-      for (const pipeline of linkedPipelines) {
-        if (pipeline.branch === branch && pipeline.enabled) {
-          console.log(`[Webhook] Triggering pipeline ${pipeline.name} for branch ${branch}`);
-          // Note: In a real system, we'd use the pipeline router's run method, but we can just enqueue directly here
-          // We would need to create a pipelineRun and job record. To keep it simple, we just log it for now.
-          // The actual implementation of triggering a pipeline run is better done via the tRPC client or shared logic.
-          console.log(`[Webhook] Pipeline triggering is delegated to manual / tRPC run for now.`);
-        }
+      // Branch deletions also arrive as push events; there is nothing to deploy.
+      if (payload.deleted) {
+        res.json({ ok: true, skipped: "branch deleted" });
+        return;
+      }
+      const branch = String(payload.ref || "").replace("refs/heads/", "") || "main";
+      const commitSha: string | null = payload.after || payload.head_commit?.id || null;
+      const commitMessage: string | null = payload.head_commit?.message || null;
+
+      // 1. Pipelines linked to this repository + branch
+      const allPipelines = await db.select().from(pipelines).where(eq(pipelines.enabled, true));
+      for (const pipeline of allPipelines) {
+        if (normalizeRepoUrl(pipeline.repoUrl) !== repoKey || (pipeline.branch ?? "main") !== branch) continue;
+        console.log(`[Webhook] Triggering pipeline ${pipeline.name} (${branch})`);
+        await enqueuePipelineRun(pipeline, { commitSha });
+        triggered.pipelines += 1;
       }
 
-      // 2. Trigger Site Auto-Deploys (if we want direct site push-to-deploy)
-      const linkedSites = await db.select().from(sites).where(eq(sites.repoUrl, repoUrl));
-      for (const site of linkedSites) {
-        if (site.branch === branch && site.active && !site.isPreview) {
-          console.log(`[Webhook] Triggering auto-deploy for site ${site.domain}`);
-          await hostingQueue.add("deploy-site", {
-            siteId: site.id,
-            source: "git",
-            repoUrl: site.repoUrl,
-            branch: site.branch,
-          });
-        }
+      // 2. Sites linked to this repository + branch
+      const gitSites = await db.select().from(sites).where(eq(sites.source, "git"));
+      for (const site of gitSites) {
+        if (normalizeRepoUrl(site.repoUrl) !== repoKey) continue;
+        if ((site.branch ?? "main") !== branch || !site.active || site.isPreview || site.autoDeploy === false) continue;
+        console.log(`[Webhook] Auto-deploying ${site.domain} (${branch} @ ${commitSha?.slice(0, 7) ?? "?"})`);
+        await enqueueDeploy(site.id, { trigger: "webhook", commitSha, commitMessage, createdBy: site.userId });
+        triggered.sites += 1;
       }
-    } 
-    else if (event === "pull_request") {
+    } else if (event === "pull_request") {
       const action = payload.action;
-      const prNumber = payload.pull_request?.number;
+      const prNumber = Number(payload.pull_request?.number);
       const branch = payload.pull_request?.head?.ref;
-      
-      if (!prNumber || !branch) {
+
+      if (!Number.isInteger(prNumber) || typeof branch !== "string" || !isValidBranch(branch)) {
         res.status(400).json({ error: "Invalid PR payload" });
         return;
       }
 
-      // Find the parent site that corresponds to this repository
-      const [parentSite] = await db.select().from(sites).where(eq(sites.repoUrl, repoUrl)).limit(1);
-      
-      if (parentSite && !parentSite.isPreview) {
+      const gitSites = await db.select().from(sites).where(eq(sites.source, "git"));
+      const parentSite = gitSites.find((s) => !s.isPreview && normalizeRepoUrl(s.repoUrl) === repoKey);
+
+      if (parentSite) {
         const previewDomain = `pr-${prNumber}-${parentSite.domain}`;
+        const [existingPreview] = await db.select().from(sites).where(eq(sites.domain, previewDomain)).limit(1);
 
         if (action === "opened" || action === "synchronize" || action === "reopened") {
-          console.log(`[Webhook] Spinning up Preview Environment: ${previewDomain}`);
-          
-          // Check if preview site already exists
-          const [existingPreview] = await db.select().from(sites).where(eq(sites.domain, previewDomain)).limit(1);
-          
-          let previewSiteId;
+          let previewSiteId = existingPreview?.id;
+          const expiresAt = new Date(Date.now() + PREVIEW_TTL_MS);
+
           if (!existingPreview) {
-            const [newPreview] = await db.insert(sites).values({
-              id: crypto.randomUUID(),
+            const id = crypto.randomUUID();
+            await db.insert(sites).values({
+              id,
+              userId: parentSite.userId, // previews belong to the owner of the parent site
               domain: previewDomain,
               type: parentSite.type,
-              docRoot: `/var/www/sites/preview-${crypto.randomUUID().slice(0, 8)}`,
+              docRoot: siteDocRoot(id),
               source: "git",
-              repoUrl: repoUrl,
-              branch: branch,
+              repoUrl: parentSite.repoUrl,
+              branch,
+              buildCommand: parentSite.buildCommand,
+              startCommand: parentSite.startCommand,
               isPreview: true,
+              isTemporary: true,
+              expiresAt,
               parentSiteId: parentSite.id,
               active: true,
-            }).returning();
-            previewSiteId = newPreview.id;
+              status: "provisioning",
+            });
+            previewSiteId = id;
           } else {
-            previewSiteId = existingPreview.id;
+            await db.update(sites).set({ branch, expiresAt, active: true }).where(eq(sites.id, existingPreview.id));
           }
 
-          // Trigger deployment for the preview site
-          await hostingQueue.add("deploy-site", {
-            siteId: previewSiteId,
-            source: "git",
-            repoUrl: repoUrl,
-            branch: branch,
+          console.log(`[Webhook] Deploying preview environment ${previewDomain}`);
+          await enqueueDeploy(previewSiteId!, {
+            trigger: "preview",
+            commitSha: payload.pull_request?.head?.sha ?? null,
+            commitMessage: payload.pull_request?.title ?? null,
+            createdBy: parentSite.userId,
           });
-        } 
-        else if (action === "closed") {
-          console.log(`[Webhook] Tearing down Preview Environment: ${previewDomain}`);
-          
-          const [previewSite] = await db.select().from(sites).where(eq(sites.domain, previewDomain)).limit(1);
-          if (previewSite) {
-            // We would ideally have a "destroy-site" worker job
-            // For now, we update it as inactive and we could clean it up manually or add a cleanup job
-            await db.update(sites).set({ active: false }).where(eq(sites.id, previewSite.id));
-            console.log(`[Webhook] Marked preview site ${previewSite.id} as inactive.`);
-          }
+          triggered.previews += 1;
+        } else if (action === "closed" && existingPreview?.isPreview) {
+          // Actually tear the preview down (containers, images, source), not just flag it.
+          console.log(`[Webhook] Tearing down preview environment ${previewDomain}`);
+          await db.update(sites).set({ active: false, desiredStatus: "deleted" }).where(eq(sites.id, existingPreview.id));
+          await hostingQueue.add("delete-site", { siteId: existingPreview.id });
         }
       }
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, triggered });
   } catch (err: any) {
     console.error("[Webhook Error]:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Webhook processing failed" });
   }
 });
 

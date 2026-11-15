@@ -5,28 +5,34 @@ import React, { useState } from "react";
 import { trpc } from "../utils/trpc";
 
 const getBaseUrl = () => {
-  if (typeof window !== "undefined") return ""; // browser should use relative path
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`; // SSR on vercel
-  return `http://localhost:4000`; // dev SSR
+  if (typeof window !== "undefined") return ""; // the browser goes through the Next.js rewrite
+  return process.env.API_INTERNAL_URL || "http://localhost:4000";
 };
 
-const apiUrl = getBaseUrl();
-
 export default function TRPCProvider({ children }: { children: React.ReactNode }) {
-  const [queryClient] = useState(() => new QueryClient());
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            // Show cached data instantly when moving between pages and refresh in the background.
+            staleTime: 10_000,
+            cacheTime: 10 * 60_000,
+            refetchOnWindowFocus: true,
+            retry: (count, err: any) => count < 2 && !["UNAUTHORIZED", "FORBIDDEN", "NOT_FOUND", "BAD_REQUEST"].includes(err?.data?.code),
+          },
+        },
+      })
+  );
   const [trpcClient] = useState(() =>
     trpc.createClient({
       links: [
         httpBatchLink({
-          url: `${apiUrl}/trpc`,
+          url: `${getBaseUrl()}/trpc`,
           headers() {
-            if (typeof window !== "undefined") {
-              const token = localStorage.getItem("token");
-              return {
-                authorization: token ? `Bearer ${token}` : undefined,
-              };
-            }
-            return {};
+            if (typeof window === "undefined") return {};
+            const token = localStorage.getItem("token");
+            return token ? { authorization: `Bearer ${token}` } : {};
           },
         }),
       ],
@@ -35,9 +41,7 @@ export default function TRPCProvider({ children }: { children: React.ReactNode }
 
   return (
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
-      <QueryClientProvider client={queryClient}>
-        {children}
-      </QueryClientProvider>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     </trpc.Provider>
   );
 }

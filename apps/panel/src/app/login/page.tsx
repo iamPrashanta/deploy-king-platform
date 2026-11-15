@@ -1,205 +1,75 @@
 "use client";
 
 import React, { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import { trpc } from "@/utils/trpc";
-import { Shield, Lock, User, Loader2 } from "lucide-react";
+import { Crown } from "@/components/shell/Shell";
+import { ThemeSwitch } from "@/components/theme";
+import { Spinner } from "@/components/ui";
 
-export default function LoginPage() {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+function LoginForm() {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const router = useRouter();
+  const params = useSearchParams();
+  const message = params.get("message");
 
   const login = trpc.auth.login.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       localStorage.setItem("token", data.token);
-      router.push("/");
+      router.push(data.user?.mustChangePassword ? "/setup/password" : "/");
     },
-    onError: (err) => {
-      setError(err.message);
-    },
+    onError: (err) => setError(err.message === "Invalid credentials" ? "Wrong username or password." : err.message),
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    login.mutate({ username, password });
-  };
-
   return (
-    <main className="login-page">
-      <div className="login-card glass">
-        <div className="login-header">
-          <div className="logo-box">
-            <Shield size={32} className="text-primary" />
-          </div>
-          <h1>DBBKP Platform</h1>
-          <p>Next-generation infrastructure control plane</p>
+    <main className="auth">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <span className="logo" style={{ width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center", background: "var(--primary-bg)", color: "var(--primary-fg)" }}>
+            <Crown size={17} />
+          </span>
+          Deploy King
         </div>
-
-        <form onSubmit={handleSubmit} className="login-form">
-          <div className="form-group">
-            <label>Username</label>
-            <div className="input-wrapper">
-              <User size={18} className="input-icon" />
-              <input
-                type="text"
-                className="input"
-                placeholder="Enter username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label>Password</label>
-            <div className="input-wrapper">
-              <Lock size={18} className="input-icon" />
-              <input
-                type="password"
-                className="input"
-                placeholder="Enter password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-
-          {error && <div className="login-error">{error}</div>}
-
-          <button
-            type="submit"
-            className="btn btn-primary login-submit"
-            disabled={login.isLoading}
+        <div className="card card-pad" style={{ padding: 28 }}>
+          <h1>Sign in</h1>
+          <p className="sub">to your Deploy King server</p>
+          {message && <div className="notice ok" style={{ marginBottom: 16 }}>{message}</div>}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              setError("");
+              login.mutate({ username: username.trim(), password });
+            }}
           >
-            {login.isLoading ? (
-              <Loader2 className="spin" size={20} />
-            ) : (
-              "Sign In"
-            )}
-          </button>
-        </form>
-
-        <div className="login-footer">
-          <p>&copy; 2026 DBBKP Infrastructure. All rights reserved.</p>
+            <div className="field">
+              <label className="label" htmlFor="u">Username</label>
+              <input id="u" className="input" autoComplete="username" autoFocus value={username} onChange={(e) => setUsername(e.target.value)} required />
+            </div>
+            <div className="field">
+              <label className="label" htmlFor="p">Password</label>
+              <input id="p" className="input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            </div>
+            {error && <div className="notice bad" style={{ marginBottom: 16 }}>{error}</div>}
+            <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={login.isLoading}>
+              {login.isLoading ? <Spinner /> : "Sign in"}
+            </button>
+          </form>
+        </div>
+        <div className="row" style={{ justifyContent: "center", marginTop: 20 }}>
+          <ThemeSwitch compact />
         </div>
       </div>
-
-      <style jsx>{`
-        .login-page {
-          height: 100vh;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          background: radial-gradient(circle at center, #121418 0%, #0a0b0d 100%);
-          padding: 20px;
-        }
-
-        .login-card {
-          width: 100%;
-          max-width: 440px;
-          padding: 3rem;
-          display: flex;
-          flex-direction: column;
-          gap: 2.5rem;
-          box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
-        }
-
-        .login-header {
-          text-align: center;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 1rem;
-        }
-
-        .logo-box {
-          width: 64px;
-          height: 64px;
-          background: rgba(59, 130, 246, 0.1);
-          border-radius: 16px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          margin-bottom: 0.5rem;
-        }
-
-        .login-header h1 {
-          font-size: 1.75rem;
-          font-weight: 800;
-          letter-spacing: -0.03em;
-        }
-
-        .login-header p {
-          color: var(--text-muted);
-          font-size: 0.95rem;
-        }
-
-        .login-form {
-          display: flex;
-          flex-direction: column;
-          gap: 1.5rem;
-        }
-
-        .form-group {
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-
-        .form-group label {
-          font-size: 0.85rem;
-          font-weight: 600;
-          color: var(--text-muted);
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-
-        .input-wrapper {
-          position: relative;
-          display: flex;
-          align-items: center;
-        }
-
-        .input-icon {
-          position: absolute;
-          left: 12px;
-          color: var(--text-muted);
-        }
-
-        .input-wrapper :global(.input) {
-          padding-left: 40px;
-          height: 48px;
-          background: rgba(0, 0, 0, 0.2);
-          font-size: 1rem;
-        }
-
-        .login-submit {
-          height: 48px;
-          font-size: 1rem;
-          margin-top: 0.5rem;
-        }
-
-        .login-error {
-          padding: 10px;
-          background: rgba(239, 68, 68, 0.1);
-          color: var(--error);
-          border-radius: var(--radius);
-          font-size: 0.85rem;
-          text-align: center;
-          border: 1px solid rgba(239, 68, 68, 0.2);
-        }
-
-        .login-footer {
-          text-align: center;
-          color: var(--text-muted);
-          font-size: 0.8rem;
-        }
-      `}</style>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }

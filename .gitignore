@@ -23,7 +23,8 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# TypeScript / Vite / Turbo builds
+# TypeScript / Vite / Turbo / Next builds
+.next/
 dist/
 dist-ssr/
 *.tsbuildinfo
@@ -41,6 +42,8 @@ dist-ssr/
 *.sql.gz
 *.backup
 *.sha256
+# ...but schema migrations are source, not dumps
+!packages/db/drizzle/*.sql
 
 # Editor directories and files
 .vscode/*

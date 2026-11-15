@@ -9,7 +9,7 @@ import { logAudit } from "@dbbkp/audit";
 
 const router = Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || "dbbkp-super-secret-change-in-prod";
+import { JWT_SECRET } from "../config";
 const JWT_EXPIRES = process.env.JWT_EXPIRES || "7d";
 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────

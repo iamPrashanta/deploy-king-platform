@@ -5,7 +5,7 @@ import { db, sessions, users } from "@dbbkp/db";
 import { eq } from "drizzle-orm";
 import { hasPermission } from "../utils/rbac";
 
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
+import { JWT_SECRET } from "../config";
 
 export type Context = {
   user: { 

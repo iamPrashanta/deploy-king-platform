@@ -124,7 +124,12 @@ export class ExecutionBroker {
     return new Promise((resolve, reject) => {
       const child = spawn(intent.command, intent.args, {
         cwd: options.cwd,
-        env: { ...process.env, ...options.env },
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          LANG: process.env.LANG,
+          ...options.env,
+        },
       });
 
       let stdout = "";
