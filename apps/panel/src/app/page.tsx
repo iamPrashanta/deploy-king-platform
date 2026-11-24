@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, Cpu, Github, HardDrive, HardDriveDownload, LayoutTemplate, MemoryStick, Plus, Rocket } from "lucide-react";
+import { AlertTriangle, Boxes, ChevronRight, Cpu, Github, HardDrive, HardDriveDownload, HelpCircle, LayoutTemplate, MemoryStick, Plus, Rocket } from "lucide-react";
 import { trpc } from "@/utils/trpc";
 import { useCrumbs } from "@/components/shell/Shell";
 import { PageHeader, Skeleton, StatusBadge, bytes, duration, timeAgo, Empty, cx } from "@/components/ui";
 import { useAuth } from "@/components/AuthProvider";
+import { memText } from "@/components/FitCheck";
 
 function Meter({ used, total }: { used: number | null; total: number | null }) {
   const pct = used != null && total ? Math.round((used / total) * 100) : 0;
@@ -47,7 +48,7 @@ export default function OverviewPage() {
         <div className="card card-pad stat">
           <div className="k"><Boxes size={14} /> Applications</div>
           {d ? <div className="v">{d.apps.running}<span className="faint" style={{ fontSize: 15 }}> / {d.apps.total} running</span></div> : <Skeleton h={30} w={90} style={{ marginTop: 8 }} />}
-          <div className="s">{d ? (d.apps.failed ? <span className="bad-text">{d.apps.failed} failed</span> : d.apps.building ? `${d.apps.building} deploying` : "All healthy") : " "}</div>
+          <div className="s">{d ? (d.apps.crashing || d.apps.failed ? <span className="bad-text">{[d.apps.crashing ? `${d.apps.crashing} crashing` : "", d.apps.failed ? `${d.apps.failed} failed` : ""].filter(Boolean).join(" · ")}</span> : d.apps.building ? `${d.apps.building} deploying` : "All healthy") : " "}</div>
         </div>
         <div className="card card-pad stat">
           <div className="k"><Rocket size={14} /> Deploys today</div>
@@ -67,6 +68,58 @@ export default function OverviewPage() {
           {d && <Meter used={d.server.memUsed} total={d.server.memTotal} />}
         </div>
       </div>
+
+      {d?.capacity && (
+        <section className="card room" aria-label="Room left on this server" style={{ marginTop: 16 }}>
+          <div className="card-head">
+            <h3>Room left</h3>
+            <span className="right"><Link href="/settings?tab=server" className="btn btn-sm">Capacity settings</Link></span>
+          </div>
+          <div className="card-body grid g4">
+            <div className="stat">
+              <div className="k">New apps that fit</div>
+              <div className="v">about {d.capacity.apps.roomFor}</div>
+              <div className="s">at {memText(d.capacity.apps.typicalMb)} each</div>
+            </div>
+            <div className="stat">
+              <div className="k">Memory promised to apps</div>
+              <div className="v">{memText(d.capacity.memory.reservedMb)}</div>
+              <div className="s">of the {memText(d.capacity.memory.promiseLimitMb)} this server gives out</div>
+              <Meter used={d.capacity.memory.reservedMb} total={d.capacity.memory.promiseLimitMb} />
+            </div>
+            <div className="stat">
+              <div className="k">Memory free right now</div>
+              <div className="v">{memText(Math.max(0, d.capacity.memory.freeNowMb))}</div>
+              <div className="s">after {memText(d.capacity.memory.hostReserveMb)} kept for the panel</div>
+            </div>
+            <div className="stat">
+              <div className="k">Disk free</div>
+              <div className="v">{d.capacity.disk ? memText(d.capacity.disk.freeMb) : "Unknown"}</div>
+              <div className="s">{d.capacity.disk ? `${memText(d.capacity.disk.reserveMb)} of it kept in reserve` : "The disk could not be measured"}</div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {d && d.attention.length > 0 && (
+        <>
+          <h2 className="section">Needs attention <span className="badge bad">{d.attention.length}</span></h2>
+          <div className="card">
+            {d.attention.map((a, n) => (
+              <Link key={a.kind + a.siteId + n} href={a.href} className="attn-row">
+                <span className={cx("attn-ic", a.kind === "question" || a.kind === "security-check" ? "warn" : "bad")}>{a.kind === "question" ? <HelpCircle size={15} /> : <AlertTriangle size={15} />}</span>
+                <span className="grow" style={{ minWidth: 0 }}>
+                  <span className="strong">{a.domain.split(".")[0]}</span>
+                  <span className="badge" style={{ marginLeft: 8 }}>{a.kind === "question" ? "Needs your answer" : a.kind === "crashing" ? "Crashing" : a.kind === "security" ? "Security" : a.kind === "security-check" ? "To review" : a.kind === "job-failed" ? "Scheduled job" : a.kind === "worker-crashing" ? "Worker" : "Failed"}</span>
+                  <span className="muted small ellipsis" style={{ display: "block", marginTop: 2 }}>{a.text}</span>
+                </span>
+                <span className="link small" style={{ whiteSpace: "nowrap" }}>{a.kind === "question" ? "Answer" : a.kind === "crashing" || a.kind === "worker-crashing" ? "See why" : a.kind.startsWith("security") ? "Review" : a.kind === "job-failed" ? "See the runs" : "Open"}</span>
+                <ChevronRight size={15} className="faint" />
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
 
       {showSetup && (
         <>

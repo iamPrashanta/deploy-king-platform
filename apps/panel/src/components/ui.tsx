@@ -48,6 +48,7 @@ const STATUS: Record<string, { tone: Tone; label: string; live?: boolean }> = {
   starting: { tone: "info", label: "Starting", live: true },
   waiting_input: { tone: "warn", label: "Needs your answer", live: true },
   failed: { tone: "bad", label: "Failed" },
+  crashing: { tone: "bad", label: "Crashing", live: true },
   superseded: { tone: "neutral", label: "Replaced" },
   pending: { tone: "neutral", label: "Waiting for upload" },
   stopped: { tone: "neutral", label: "Stopped" },

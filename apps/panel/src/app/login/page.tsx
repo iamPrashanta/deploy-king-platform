@@ -28,7 +28,7 @@ function LoginForm() {
     <main className="auth">
       <div className="auth-card">
         <div className="auth-brand">
-          <span className="logo" style={{ width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center", background: "var(--primary-bg)", color: "var(--primary-fg)" }}>
+          <span className="logo" style={{ width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center", background: "var(--fill-bg)", color: "var(--fill-fg)" }}>
             <Crown size={17} />
           </span>
           Deploy King
@@ -58,6 +58,7 @@ function LoginForm() {
             </button>
           </form>
         </div>
+        <p className="small muted" style={{ textAlign: "center", marginTop: 16 }}>No account yet? <a href="/signup" style={{ color: "var(--link)" }}>Request access</a></p>
         <div className="row" style={{ justifyContent: "center", marginTop: 20 }}>
           <ThemeSwitch compact />
         </div>

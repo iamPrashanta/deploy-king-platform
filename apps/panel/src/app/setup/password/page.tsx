@@ -27,7 +27,7 @@ export default function PasswordSetupPage() {
     <main className="auth">
       <div className="auth-card" style={{ maxWidth: 420 }}>
         <div className="auth-brand">
-          <span style={{ width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center", background: "var(--primary-bg)", color: "var(--primary-fg)" }}>
+          <span style={{ width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center", background: "var(--fill-bg)", color: "var(--fill-fg)" }}>
             <Crown size={17} />
           </span>
           Deploy King

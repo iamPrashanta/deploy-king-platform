@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Boxes, ExternalLink, Plus, Search } from "lucide-react";
-import { appUrl, sourceLabel, RUNTIME } from "@/components/apps";
+import { appStatus, appUrl, sourceLabel, RUNTIME } from "@/components/apps";
 import { trpc } from "@/utils/trpc";
 import { useCrumbs } from "@/components/shell/Shell";
 import { Empty, PageHeader, Skeleton, StatusBadge, Tile, timeAgo, isLiveStatus } from "@/components/ui";
@@ -87,7 +87,7 @@ export default function AppsPage() {
                         </div>
                       </div>
                     </td>
-                    <td><StatusBadge status={s.status} /></td>
+                    <td><StatusBadge status={appStatus(s)} /></td>
                     <td className="desktop-only muted small"><span className="row" style={{ gap: 6 }}>{src.icon}<span className="ellipsis" style={{ maxWidth: 240 }}>{src.text}</span></span></td>
                     <td className="desktop-only muted small">{RUNTIME[s.type] ?? s.type}</td>
                     <td className="muted small">{timeAgo(s.updatedAt)}</td>

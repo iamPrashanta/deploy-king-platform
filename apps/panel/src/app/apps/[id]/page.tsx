@@ -4,13 +4,17 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ExternalLink, GitBranch, GitCommit, History, Pause, Play, RotateCcw, Rocket, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { FitNotice, useFit } from "@/components/FitCheck";
 import { trpc } from "@/utils/trpc";
+import { useAuth } from "@/components/AuthProvider";
 import { useCrumbs } from "@/components/shell/Shell";
 import { Dialog, Empty, Skeleton, Spinner, StatusBadge, Tile, cx, duration, errMsg, isLiveStatus, timeAgo } from "@/components/ui";
-import { appUrl, sourceLabel, RUNTIME } from "@/components/apps";
-import { EnvEditor, type EnvRow } from "@/components/EnvEditor";
+import { appStatus, appUrl, sourceLabel, RUNTIME } from "@/components/apps";
+import { EnvEditor, rowBuildTime, type EnvRow } from "@/components/EnvEditor";
+import { JobsTab } from "@/components/AppJobs";
+import { WorkersTab } from "@/components/AppWorkers";
 
-type Tab = "deployments" | "logs" | "variables" | "settings";
+type Tab = "deployments" | "logs" | "variables" | "workers" | "jobs" | "settings";
 
 // ── Build log ────────────────────────────────────────────────────────────────
 function LogView({ text, follow }: { text: string; follow: boolean }) {
@@ -40,7 +44,13 @@ function LogView({ text, follow }: { text: string; follow: boolean }) {
 function PromptCard({ deployment, onAnswered }: { deployment: any; onAnswered: () => void }) {
   const p = deployment.prompt;
   const [choice, setChoice] = useState<string>(p?.default ?? "");
-  const answer = trpc.sites.answer.useMutation({ onSuccess: onAnswered, onError: (e) => toast.error(errMsg(e)) });
+  // An answer that asks for more memory can be refused because it does not fit; the server owner may start anyway.
+  const [blocked, setBlocked] = useState<{ value: string; message: string } | null>(null);
+  const isAdmin = useAuth().user?.role === "admin";
+  const answer = trpc.sites.answer.useMutation({
+    onSuccess: onAnswered,
+    onError: (e, v) => (errMsg(e).includes("does not fit") ? setBlocked({ value: (v as any).value, message: errMsg(e) }) : toast.error(errMsg(e))),
+  });
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -48,7 +58,10 @@ function PromptCard({ deployment, onAnswered }: { deployment: any; onAnswered: (
   }, []);
   if (!p) return null;
   const left = Math.max(0, new Date(p.expiresAt).getTime() - now);
-  const send = (value: string) => answer.mutate({ deploymentId: deployment.id, promptId: p.id, value });
+  const send = (value: string, allowOverCapacity?: boolean) => {
+    setBlocked(null);
+    answer.mutate({ deploymentId: deployment.id, promptId: p.id, value, allowOverCapacity });
+  };
   return (
     <div className="prompt-card">
       <div className="row top">
@@ -77,6 +90,17 @@ function PromptCard({ deployment, onAnswered }: { deployment: any; onAnswered: (
               <button className="btn btn-primary" disabled={answer.isLoading || !choice} onClick={() => send(choice)}>
                 {answer.isLoading ? <Spinner /> : "Continue"}
               </button>
+            </div>
+          )}
+          {blocked && (
+            <div className="notice bad" style={{ marginTop: 12 }}>
+              <div className="grow">
+                {blocked.message}
+                <div className="row wrap" style={{ marginTop: 8 }}>
+                  <span className="small muted">Pick a smaller size, or free memory by stopping an app you do not need.</span>
+                  {isAdmin && <button className="btn btn-sm" disabled={answer.isLoading} onClick={() => send(blocked.value, true)}>Start anyway</button>}
+                </div>
+              </div>
             </div>
           )}
           <div className="faint small" style={{ marginTop: 10 }}>The current release keeps serving while the deploy waits. With no answer, the deploy stops.</div>
@@ -211,12 +235,19 @@ function Variables({ site }: { site: any }) {
   const [rows, setRows] = useState<EnvRow[]>([]);
   const setMany = trpc.sites.envSetMany.useMutation();
   const unset = trpc.sites.envUnset.useMutation();
+  const setBuild = trpc.sites.envSetBuildTime.useMutation();
   const redeploy = trpc.sites.redeploy.useMutation();
   const done = () => utils.sites.envList.invalidate({ id: site.id });
+  const canBuild = site.source !== "image";
 
   return (
     <div className="stack" style={{ gap: 16, maxWidth: 860 }}>
-      <div className="notice info small">Values are encrypted on the server and never shown again. Changes apply on the next deploy.</div>
+      <div className="notice info small">
+        <span>
+          Values are encrypted on the server and never shown again. Changes apply on the next deploy.
+          {canBuild && <> Tick <b>Build</b> for variables the build itself reads, such as <span className="mono">NEXT_PUBLIC_…</span> or <span className="mono">VITE_…</span>; those need a full redeploy, not a restart.</>}
+        </span>
+      </div>
       <div className="card">
         <div className="card-head"><h3>Set variables</h3><span className="right faint small">{list.data?.length ?? 0} stored</span></div>
         {list.data && list.data.length > 0 && (
@@ -224,9 +255,15 @@ function Variables({ site }: { site: any }) {
             {list.data.map((v: any) => (
               <div key={v.key} className="row" style={{ padding: "10px 18px" }}>
                 <span className="mono small strong grow ellipsis">{v.key}</span>
+                {canBuild && (
+                  <label className="row small muted" style={{ gap: 6 }} title="Also give this variable to the build">
+                    <input type="checkbox" checked={!!v.buildTime} disabled={setBuild.isLoading} onChange={(e) => setBuild.mutate({ id: site.id, key: v.key, buildTime: e.target.checked }, { onSuccess: done, onError: (er) => toast.error(errMsg(er)) })} />
+                    Build
+                  </label>
+                )}
                 <span className="mono faint small">••••••••</span>
                 <span className="faint small" style={{ width: 90, textAlign: "right" }}>{timeAgo(v.updatedAt)}</span>
-                <button className="btn btn-ghost btn-sm" onClick={() => setRows((r) => [...r.filter((x) => x.key !== v.key), { key: v.key, value: "" }])}>Change</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setRows((r) => [...r.filter((x) => x.key !== v.key), { key: v.key, value: "", buildTime: !!v.buildTime }])}>Change</button>
                 <button className="icon-btn" aria-label={`Remove ${v.key}`} onClick={() => unset.mutate({ id: site.id, key: v.key }, { onSuccess: done })}>
                   <Trash2 size={14} />
                 </button>
@@ -235,7 +272,7 @@ function Variables({ site }: { site: any }) {
           </div>
         )}
         <div className="card-body" style={{ borderTop: list.data?.length ? "1px solid var(--border)" : undefined }}>
-          <EnvEditor rows={rows} onChange={setRows} />
+          <EnvEditor rows={rows} onChange={setRows} build={canBuild} />
           {rows.length > 0 && (
             <div className="row" style={{ marginTop: 14 }}>
               <button
@@ -243,7 +280,7 @@ function Variables({ site }: { site: any }) {
                 disabled={setMany.isLoading || rows.some((r) => !r.key)}
                 onClick={() =>
                   setMany.mutate(
-                    { id: site.id, vars: rows.map((r) => ({ key: r.key, value: r.value })) },
+                    { id: site.id, vars: rows.map((r) => ({ key: r.key, value: r.value, buildTime: canBuild && rowBuildTime(r) })) },
                     {
                       onSuccess: () => {
                         setRows([]);
@@ -275,6 +312,7 @@ function Settings({ site }: { site: any }) {
     port: site.port ? String(site.port) : "",
     buildCommand: site.buildCommand ?? "",
     startCommand: site.startCommand ?? "",
+    rootDirectory: site.rootDirectory ?? "",
     autoDeploy: site.autoDeploy !== false,
     memoryLimit: String(site.memoryLimit ?? 512),
     cpuLimit: String(site.cpuLimit ?? 1),
@@ -283,6 +321,10 @@ function Settings({ site }: { site: any }) {
   const [typed, setTyped] = useState("");
   const update = trpc.sites.update.useMutation();
   const del = trpc.sites.delete.useMutation();
+  // Only a higher memory limit takes more of the server, so only that is checked.
+  const wantedMemory = Number(form.memoryLimit) || 512;
+  const raising = wantedMemory > (site.memoryLimit ?? 512) && wantedMemory <= 65536;
+  const fit = useFit(raising ? wantedMemory : undefined, { siteId: site.id, enabled: raising });
   const set = (k: keyof typeof form) => (e: any) => setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
 
   const save = () =>
@@ -290,11 +332,12 @@ function Settings({ site }: { site: any }) {
       {
         id: site.id,
         domain: form.domain !== site.domain ? form.domain : undefined,
-        ...(site.source === "git" ? { branch: form.branch, buildCommand: form.buildCommand || null, startCommand: form.startCommand || null, autoDeploy: form.autoDeploy } : {}),
+        ...(site.source === "git" ? { branch: form.branch, buildCommand: form.buildCommand || null, startCommand: form.startCommand || null, rootDirectory: form.rootDirectory.trim() || null, autoDeploy: form.autoDeploy } : {}),
         ...(site.source === "image" ? { image: form.image } : {}),
         port: form.port ? Number(form.port) : null,
         memoryLimit: Number(form.memoryLimit) || 512,
         cpuLimit: Number(form.cpuLimit) || 1,
+        allowOverCapacity: fit.allowOverCapacity,
       } as any,
       {
         onSuccess: () => {
@@ -315,6 +358,7 @@ function Settings({ site }: { site: any }) {
           {site.source === "git" && (
             <>
               <div className="field"><label className="label">Branch</label><input className="input mono" value={form.branch} onChange={set("branch")} /></div>
+              <div className="field"><label className="label">Root directory</label><input className="input mono" value={form.rootDirectory} onChange={set("rootDirectory")} placeholder="Repository root" spellCheck={false} /><div className="hint">The folder to build, for repositories with several apps. Example: apps/web</div></div>
               <div className="field"><label className="label">Build command</label><input className="input mono" value={form.buildCommand} onChange={set("buildCommand")} placeholder="Detected" /></div>
               <div className="field"><label className="label">Start command</label><input className="input mono" value={form.startCommand} onChange={set("startCommand")} placeholder="Detected" /></div>
             </>
@@ -322,6 +366,7 @@ function Settings({ site }: { site: any }) {
           {site.source === "image" && <div className="field"><label className="label">Image</label><input className="input mono" value={form.image} onChange={set("image")} /></div>}
           <div className="field"><label className="label">Memory limit (MB)</label><input className="input" inputMode="numeric" value={form.memoryLimit} onChange={set("memoryLimit")} /></div>
           <div className="field"><label className="label">CPU cores</label><input className="input" inputMode="numeric" value={form.cpuLimit} onChange={set("cpuLimit")} /></div>
+          {raising && fit.fit && fit.fit.verdict !== "fits" && <div style={{ gridColumn: "1 / -1" }}><FitNotice state={fit} action="Save" /></div>}
         </div>
         <div className="card-body" style={{ borderTop: "1px solid var(--border)" }}>
           {site.source === "git" && (
@@ -330,7 +375,7 @@ function Settings({ site }: { site: any }) {
               <span>Redeploy automatically on every push to <span className="mono">{form.branch}</span></span>
             </label>
           )}
-          <button className="btn btn-primary" onClick={save} disabled={update.isLoading}>{update.isLoading ? <Spinner /> : <><Save size={14} /> Save</>}</button>
+          <button className="btn btn-primary" onClick={save} disabled={update.isLoading || fit.blocked}>{update.isLoading ? <Spinner /> : <><Save size={14} /> Save</>}</button>
         </div>
       </div>
 
@@ -494,7 +539,7 @@ function AppDetail() {
           <div style={{ minWidth: 0 }}>
             <div className="row" style={{ gap: 10 }}>
               <h1 className="ellipsis">{s.domain.split(".")[0]}</h1>
-              <StatusBadge status={s.status} />
+              <StatusBadge status={appStatus(s)} />
             </div>
             <div className="row wrap muted small" style={{ gap: 14, marginTop: 4 }}>
               <a className="link row" style={{ gap: 5 }} href={url} target="_blank" rel="noreferrer">{s.domain}<ExternalLink size={12} /></a>
@@ -530,6 +575,8 @@ function AppDetail() {
           ["deployments", "Deployments", <History key="h" size={14} />],
           ["logs", "Logs", null],
           ["variables", "Variables", null],
+          ["workers", "Workers", null],
+          ["jobs", "Scheduled jobs", null],
           ["settings", "Settings", null],
         ] as const).map(([k, l, ic]) => (
           <button key={k} className={cx("tab", tab === k && "on")} onClick={() => setTab(k)}>{ic}{l}</button>
@@ -544,6 +591,8 @@ function AppDetail() {
       {tab === "deployments" && <Deployments site={s} selectedId={selected} onSelect={setSelected} />}
       {tab === "logs" && <RuntimeLogs site={s} />}
       {tab === "variables" && <Variables site={s} />}
+      {tab === "workers" && <WorkersTab site={s} />}
+      {tab === "jobs" && <JobsTab site={s} initialJob={params.get("job")} />}
       {tab === "settings" && <Settings key={s.updatedAt} site={s} />}
     </div>
   );

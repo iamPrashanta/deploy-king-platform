@@ -9,6 +9,8 @@ import { useCrumbs } from "@/components/shell/Shell";
 import { ThemeSwitch, useTheme } from "@/components/theme";
 import { Code, CopyButton, Dialog, Empty, PageHeader, Skeleton, Spinner, cx, errMsg, timeAgo } from "@/components/ui";
 import { useAuth } from "@/components/AuthProvider";
+import { CapacitySettings } from "@/components/FitCheck";
+import { CleanupCard, UsageTable } from "@/components/Cleanup";
 
 type Tab = "general" | "server" | "github" | "webhooks";
 
@@ -91,6 +93,9 @@ function ServerChecks() {
           </div>
         )}
       </div>
+      <CapacitySettings />
+      <UsageTable />
+      <CleanupCard />
     </div>
   );
 }

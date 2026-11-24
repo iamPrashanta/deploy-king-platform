@@ -7,6 +7,9 @@ export function appUrl(domain: string, info?: { tls: boolean; publicHttpPort: nu
   return `${scheme}://${domain}${port}`;
 }
 
+/** What to show as an app's status: a live app that keeps restarting is "crashing", not "running". */
+export const appStatus = (s: { status: string; health?: string | null }) => (s.status === "active" && s.health === "crashing" ? "crashing" : s.status);
+
 export function sourceLabel(s: any) {
   if (s.source === "image") return { icon: <Package size={13} />, text: s.image };
   if (s.source === "git") return { icon: <GitBranch size={13} />, text: `${(s.repoUrl || "").replace(/^https:\/\/(www\.)?github\.com\//, "").replace(/\.git$/, "")} · ${s.branch}` };

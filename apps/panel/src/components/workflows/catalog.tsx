@@ -36,9 +36,9 @@ export const STEPS: StepKind[] = [
     icon: Webhook, color: "var(--amber)", defaults: { label: "On a webhook call" }, summary: () => "POST to its URL",
   },
   {
-    type: "trigger.deployment", group: "Triggers", label: "After a deploy", description: "Runs when an app finishes deploying.",
+    type: "trigger.deployment", group: "Triggers", label: "App event", description: "Runs when a deploy finishes or an app keeps crashing.",
     icon: Rocket, color: "var(--amber)", defaults: { label: "After a deploy", event: "any", siteId: "" },
-    summary: (d, c) => `${d.event === "success" ? "Succeeded" : d.event === "failed" ? "Failed" : "Any result"} · ${d.siteId ? c.appName(d.siteId) : "any app"}`,
+    summary: (d, c) => `${d.event === "success" ? "Deploy succeeded" : d.event === "failed" ? "Deploy failed" : d.event === "crashing" ? "Keeps crashing" : "Any deploy"} · ${d.siteId ? c.appName(d.siteId) : "any app"}`,
   },
   {
     type: "action.deploy", group: "Apps", label: "Deploy app", description: "Builds and starts a new release.",

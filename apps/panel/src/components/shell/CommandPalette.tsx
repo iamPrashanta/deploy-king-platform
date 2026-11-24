@@ -10,6 +10,7 @@ const PAGES = [
   { label: "New app", href: "/apps/new" },
   { label: "Templates", href: "/templates" },
   { label: "Backup CLI: install and commands", href: "/backup-cli" },
+  { label: "AI agents: connect Claude, Cursor or Codex (MCP)", href: "/agents" },
   { label: "Settings", href: "/settings" },
   { label: "Settings: GitHub", href: "/settings?tab=github" },
   { label: "Settings: Server checks", href: "/settings?tab=server" },

@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from "
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  Bot,
   Boxes,
   ChevronsLeft,
   ChevronsRight,
@@ -20,8 +21,12 @@ import {
   Server,
   Archive,
   Workflow,
+  Users,
+  ShieldAlert,
+  Clock,
 } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
+import { isBarePath } from "@/components/paths";
 import { ThemeSwitch } from "@/components/theme";
 import { cx, useClickAway } from "@/components/ui";
 import { CommandPalette } from "./CommandPalette";
@@ -45,7 +50,7 @@ export function useCrumbs(crumbs: Crumb[]) {
   }, [key, set]);
 }
 
-type NavItem = { href: string; label: string; icon: React.ReactNode; soon?: boolean; match?: (p: string) => boolean; count?: "apps" };
+type NavItem = { href: string; label: string; icon: React.ReactNode; soon?: boolean; match?: (p: string) => boolean; count?: "apps"; adminOnly?: boolean };
 const NAV: Array<{ group?: string; items: NavItem[] }> = [
   {
     items: [
@@ -53,6 +58,7 @@ const NAV: Array<{ group?: string; items: NavItem[] }> = [
       { href: "/apps", label: "Applications", icon: <Boxes size={17} />, match: (p) => p.startsWith("/apps") || p.startsWith("/sites"), count: "apps" },
       { href: "/templates", label: "Templates", icon: <LayoutTemplate size={17} /> },
       { href: "/workflows", label: "Workflows", icon: <Workflow size={17} /> },
+      { href: "/scheduled-jobs", label: "Scheduled jobs", icon: <Clock size={17} /> },
     ],
   },
   {
@@ -67,14 +73,16 @@ const NAV: Array<{ group?: string; items: NavItem[] }> = [
   {
     group: "Platform",
     items: [
+      { href: "/agents", label: "AI agents", icon: <Bot size={17} /> },
       { href: "/servers", label: "Servers", icon: <Server size={17} />, soon: true },
+      { href: "/team", label: "Team", icon: <Users size={17} />, adminOnly: true },
+      { href: "/security", label: "Security", icon: <ShieldAlert size={17} />, adminOnly: true },
       { href: "/settings", label: "Settings", icon: <Settings size={17} /> },
     ],
   },
 ];
 
 /** Routes that render without the app shell. */
-const BARE = ["/login", "/setup/password"];
 /** Routes that use the narrow icon rail to give the canvas room (workflow editor and runs). */
 const RAIL = [/^\/workflows\/[^/]+/];
 
@@ -83,6 +91,7 @@ function Sidebar({ rail, open, onToggleRail, onNavigate }: { rail: boolean; open
   const active = (i: NavItem) => (i.match ? i.match(pathname) : pathname.startsWith(i.href));
   const sites = trpc.sites.list.useQuery(undefined, { staleTime: 30_000 });
   const counts: Record<string, number | undefined> = { apps: sites.data?.filter((s: any) => !s.isPreview).length };
+  const isAdmin = useAuth().user?.role === "admin";
   return (
     <aside className={cx("sidebar", rail && "rail", open && "open")}>
       <Link href="/" className="sb-brand" onClick={onNavigate}>
@@ -93,7 +102,7 @@ function Sidebar({ rail, open, onToggleRail, onNavigate }: { rail: boolean; open
         {NAV.map((g, gi) => (
           <React.Fragment key={gi}>
             {g.group && <div className="sb-group">{g.group}</div>}
-            {g.items.map((i) =>
+            {g.items.filter((i) => !i.adminOnly || isAdmin).map((i) =>
               i.soon ? (
                 <div key={i.href} className="sb-item disabled" title={`${i.label}: coming soon`}>
                   {i.icon}
@@ -250,7 +259,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const rail = forcedRail || userRail;
   const setCrumbsStable = useMemo(() => (c: Crumb[]) => setCrumbs(c), []);
 
-  if (BARE.includes(pathname)) return <>{children}</>;
+  if (isBarePath(pathname)) return <>{children}</>;
 
   return (
     <CrumbContext.Provider value={setCrumbsStable}>

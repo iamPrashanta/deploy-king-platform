@@ -27,7 +27,7 @@ const OUTPUT_FIELDS: Record<string, string[]> = {
   "notify.message": ["status", "ok"],
 };
 const TRIGGER_FIELDS: Record<string, string[]> = {
-  deployment: ["app", "appId", "url", "event", "deploymentId", "error"],
+  deployment: ["app", "appId", "url", "event", "deploymentId", "error", "restarts", "outOfMemory"],
   webhook: ["body", "query", "headers"],
   schedule: ["scheduledAt"],
   manual: [],
@@ -115,14 +115,15 @@ export function StepPanel(p: Props) {
 
         {node.wfType === "trigger.deployment" && (
           <>
-            <Field label="When a deploy">
+            <Field label="When" hint={d.event === "crashing" ? "Runs once when a live app starts restarting over and over, for example after running out of memory." : undefined}>
               <select className="select" value={d.event ?? "any"} onChange={set("event")}>
-                <option value="any">finishes (either way)</option>
-                <option value="success">succeeds</option>
-                <option value="failed">fails</option>
+                <option value="any">a deploy finishes (either way)</option>
+                <option value="success">a deploy succeeds</option>
+                <option value="failed">a deploy fails</option>
+                <option value="crashing">a live app keeps crashing</option>
               </select>
             </Field>
-            <Field label="Of" hint="Deploys started by workflows don't trigger this, so a workflow can't loop.">
+            <Field label="Of" hint={d.event === "crashing" ? "The values restarts, outOfMemory and error say what went wrong." : "Deploys started by workflows don't trigger this, so a workflow can't loop."}>
               <AppSelect value={d.siteId ?? ""} onChange={(v) => onChange({ siteId: v })} apps={p.apps} allowAny />
             </Field>
           </>
@@ -178,7 +179,7 @@ export function StepPanel(p: Props) {
               </select>
             </Field>
             {!["is_true", "is_empty"].includes(d.op) && <Field label="Compared with"><input className="input mono" value={d.right ?? ""} onChange={set("right")} /></Field>}
-            <div className="notice small" style={{ marginBottom: 16 }}>Connect the green <b>true</b> and red <b>false</b> dots to what happens in each case.</div>
+            <div className="notice small" style={{ marginBottom: 16 }}><span>Connect the green <b>true</b> and red <b>false</b> dots to what happens in each case.</span></div>
           </>
         )}
 

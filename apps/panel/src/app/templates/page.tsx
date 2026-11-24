@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ExternalLink, HardDrive, Rocket, Search } from "lucide-react";
 import { toast } from "sonner";
+import { FitNotice, useFit } from "@/components/FitCheck";
 import { trpc } from "@/utils/trpc";
 import { useCrumbs } from "@/components/shell/Shell";
 import { Dialog, PageHeader, Spinner, Tile, cx, errMsg } from "@/components/ui";
@@ -21,6 +22,8 @@ export default function TemplatesPage() {
   const [env, setEnv] = useState<EnvRow[]>([]);
   const info = trpc.system.info.useQuery(undefined, { staleTime: 5 * 60_000 });
   const create = trpc.sites.create.useMutation();
+  // Will it fit? Asked for the open template, with the memory it needs.
+  const fit = useFit(open?.memoryMb ?? 512, { enabled: !!open });
   const sites = trpc.sites.list.useQuery(undefined, { staleTime: 15_000 });
 
   const cats = ["All", ...Array.from(new Set(TEMPLATES.map((t) => t.category)))];
@@ -55,6 +58,7 @@ export default function TemplatesPage() {
         port: open.port,
         volumes: open.volumes,
         memoryLimit: open.memoryMb,
+        allowOverCapacity: fit.allowOverCapacity,
         env: env.filter((e) => e.key && e.value !== "").map((e) => ({ key: e.key, value: e.value })),
       } as any,
       {
@@ -109,7 +113,7 @@ export default function TemplatesPage() {
             {open && <a className="btn btn-ghost" href={open.docs} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Docs</a>}
             <span className="grow" />
             <button className="btn" onClick={() => setOpen(null)}>Cancel</button>
-            <button className="btn btn-primary" disabled={!name || taken || create.isLoading} onClick={deploy}>
+            <button className="btn btn-primary" disabled={!name || taken || create.isLoading || fit.blocked} onClick={deploy}>
               {create.isLoading ? <Spinner /> : <><Rocket size={14} /> Deploy</>}
             </button>
           </>
@@ -117,6 +121,7 @@ export default function TemplatesPage() {
       >
         {open && (
           <div className="stack" style={{ gap: 16 }}>
+            <FitNotice state={fit} showFits={false} />
             <div>
               <label className="label">Name</label>
               <div className="input-group">

@@ -3,7 +3,12 @@
 import { Eye, EyeOff, Plus, Trash2, Wand2 } from "lucide-react";
 import { useState } from "react";
 
-export type EnvRow = { key: string; value: string; hint?: string; generator?: "hex" | "laravel"; required?: boolean };
+export type EnvRow = { key: string; value: string; hint?: string; generator?: "hex" | "laravel"; required?: boolean; buildTime?: boolean };
+
+/** Frameworks bake these into the bundle while building, so they must be there at build time. */
+export const isBuildTimeKey = (key: string) => /^(NEXT_PUBLIC_|VITE_|REACT_APP_|NUXT_PUBLIC_|GATSBY_|EXPO_PUBLIC_|PUBLIC_|VUE_APP_)/.test(key);
+/** A row's build switch: what the user chose, otherwise guessed from the name. */
+export const rowBuildTime = (r: EnvRow) => r.buildTime ?? isBuildTimeKey(r.key);
 
 export function generateSecret(kind: "hex" | "laravel" = "hex") {
   const bytes = new Uint8Array(32);
@@ -28,7 +33,7 @@ export function parseDotenv(text: string): EnvRow[] {
   return rows;
 }
 
-export function EnvEditor({ rows, onChange }: { rows: EnvRow[]; onChange: (rows: EnvRow[]) => void }) {
+export function EnvEditor({ rows, onChange, build = false }: { rows: EnvRow[]; onChange: (rows: EnvRow[]) => void; build?: boolean }) {
   const [show, setShow] = useState(false);
   const [paste, setPaste] = useState(false);
   const [pasted, setPasted] = useState("");
@@ -63,6 +68,12 @@ export function EnvEditor({ rows, onChange }: { rows: EnvRow[]; onChange: (rows:
                 <button type="button" className="btn btn-sm" style={{ height: 36 }} title="Generate a random secret" onClick={() => set(i, { value: generateSecret(r.generator) })}>
                   <Wand2 size={13} /> Generate
                 </button>
+              )}
+              {build && (
+                <label className="row small muted" style={{ gap: 6, height: 36, whiteSpace: "nowrap" }} title="Also give this variable to the build. Needed for NEXT_PUBLIC_, VITE_ and similar, which are read while building.">
+                  <input type="checkbox" checked={rowBuildTime(r)} onChange={(e) => set(i, { buildTime: e.target.checked })} />
+                  Build
+                </label>
               )}
               <button type="button" className="icon-btn" style={{ height: 36 }} aria-label="Remove" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
                 <Trash2 size={15} />

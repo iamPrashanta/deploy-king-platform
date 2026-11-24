@@ -1,5 +1,6 @@
 "use client";
 
+import { isBarePath } from "@/components/paths";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { LayoutDashboard, Globe, Shield, LogOut } from "lucide-react";
@@ -9,7 +10,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const pathname = usePathname();
   const { logout, user } = useAuth();
   
-  const isLoginPage = pathname === "/login";
+  const isLoginPage = isBarePath(pathname);
 
   if (isLoginPage) {
     return <>{children}</>;

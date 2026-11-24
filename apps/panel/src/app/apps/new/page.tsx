@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Github, GitBranch, Globe, LayoutTemplate, Lock, Package, RefreshCw, Rocket, Search } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, FolderTree, Github, GitBranch, Globe, LayoutTemplate, Lock, Package, RefreshCw, Rocket, Search } from "lucide-react";
 import { toast } from "sonner";
+import { FitNotice, useFit } from "@/components/FitCheck";
 import { trpc } from "@/utils/trpc";
 import { useCrumbs } from "@/components/shell/Shell";
 import { Empty, PageHeader, Skeleton, Spinner, cx, errMsg, timeAgo } from "@/components/ui";
-import { EnvEditor, generateSecret, type EnvRow } from "@/components/EnvEditor";
+import { EnvEditor, generateSecret, rowBuildTime, type EnvRow } from "@/components/EnvEditor";
 import { ChecksList, Collapsible, FactsGrid, FileList, Question, VerdictBanner, type Report } from "@/components/ProjectReport";
 import { appUrl } from "@/components/apps";
 
@@ -60,6 +61,8 @@ export default function NewAppPage() {
   const [repoUrl, setRepoUrl] = useState("");
   const [repoName, setRepoName] = useState("");
   const [branch, setBranch] = useState("");
+  const [rootDir, setRootDir] = useState("");
+  const [allFolders, setAllFolders] = useState(false);
   const [image, setImage] = useState("");
   const [buildAs, setBuildAs] = useState("auto");
   const [checkPort, setCheckPort] = useState<string>("");
@@ -95,6 +98,8 @@ export default function NewAppPage() {
   const inspect = trpc.git.inspect.useMutation();
   const report: Report | null = (inspect.data?.report as Report) ?? null;
   const create = trpc.sites.create.useMutation();
+  // Will it fit? Asked when the Configure step opens. New apps get the default 512 MB limit.
+  const fit = useFit(undefined, { enabled: step === "configure" });
 
   const filteredRepos = useMemo(() => {
     const needle = repoQuery.trim().toLowerCase();
@@ -105,7 +110,7 @@ export default function NewAppPage() {
   const domain = useCustom ? customDomain.trim().toLowerCase() : `${slug(name)}.${baseDomain}`;
   const url = appUrl(domain, info.data);
 
-  const runCheck = () => {
+  const runCheck = (folder: string = rootDir) => {
     setStep("check");
     inspect.mutate(
       {
@@ -114,6 +119,7 @@ export default function NewAppPage() {
         providerId: kind === "github" ? providerId : null,
         type: buildAs as any,
         port: checkPort ? Number(checkPort) : null,
+        rootDirectory: folder.trim() || null,
       },
       {
         onSuccess: (res: any) => {
@@ -176,15 +182,20 @@ export default function NewAppPage() {
         port: port ? Number(port) : undefined,
         buildCommand: buildCommand.trim() || undefined,
         startCommand: startCommand.trim() || undefined,
-        env: env.filter((r) => r.key && r.value !== "").map((r) => ({ key: r.key, value: r.value })),
+        env: env.filter((r) => r.key && r.value !== "").map((r) => ({ key: r.key, value: r.value, buildTime: kind !== "image" && rowBuildTime(r) })),
+        rootDirectory: kind === "image" ? undefined : rootDir.trim() || undefined,
         autoDeploy,
+        allowOverCapacity: fit.allowOverCapacity,
       } as any,
       {
         onSuccess: (site: any) => {
           toast.success("Deploy started");
           router.push(`/apps/${site.id}`);
         },
-        onError: (e) => toast.error(errMsg(e)),
+        onError: (e) => {
+          toast.error(errMsg(e));
+          fit.refetch();
+        },
       }
     );
   };
@@ -321,8 +332,12 @@ export default function NewAppPage() {
                     {BUILD_AS.map((b) => <option key={b.v} value={b.v}>{b.l}</option>)}
                   </select>
                 </div>
+                <div style={{ minWidth: 200 }}>
+                  <label className="label" title="For repositories with several apps: the folder this app lives in.">Root directory</label>
+                  <input className="input mono" value={rootDir} onChange={(e) => setRootDir(e.target.value)} placeholder="Repository root" spellCheck={false} />
+                </div>
                 <div className="grow" />
-                <button className="btn btn-primary btn-lg" disabled={!branch || !!branches.error} onClick={runCheck}>
+                <button className="btn btn-primary btn-lg" disabled={!branch || !!branches.error} onClick={() => runCheck()}>
                   Check project <ArrowRight size={15} />
                 </button>
               </div>
@@ -372,6 +387,26 @@ export default function NewAppPage() {
                 {inspect.data.commit.date && <span>{timeAgo(inspect.data.commit.date)}</span>}
               </div>
 
+              {(inspect.data.rootDirectory || (inspect.data.folders.length > 0 && (report.verdict !== "ready" || report.checks.some((c) => c.id === "monorepo")))) && (
+                <div className="card card-pad" style={{ marginTop: 14 }}>
+                  <div className="row wrap" style={{ gap: 8 }}>
+                    <FolderTree size={15} className="faint" />
+                    <span className="strong small">
+                      {inspect.data.rootDirectory ? <>Checked the folder <span className="mono">{inspect.data.rootDirectory}</span></> : "This repository has more than one app. Which folder should be deployed?"}
+                    </span>
+                  </div>
+                  <div className="row wrap" style={{ gap: 6, marginTop: 10 }}>
+                    <button className={cx("chip-btn", !inspect.data.rootDirectory && "on")} onClick={() => { setRootDir(""); runCheck(""); }}>Repository root</button>
+                    {(allFolders ? inspect.data.folders : inspect.data.folders.filter((f: string, i: number) => i < 12 || f === inspect.data.rootDirectory)).map((f: string) => (
+                      <button key={f} className={cx("chip-btn mono", inspect.data.rootDirectory === f && "on")} onClick={() => { setRootDir(f); runCheck(f); }}>{f}</button>
+                    ))}
+                    {!allFolders && inspect.data.folders.length > 12 && (
+                      <button className="chip-btn" onClick={() => setAllFolders(true)}>Show all {inspect.data.folders.length}</button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <h2 className="section" style={{ marginTop: 8 }}>What we found</h2>
               <FactsGrid facts={report.facts} />
 
@@ -394,7 +429,7 @@ export default function NewAppPage() {
                   <pre className="code" style={{ maxHeight: 360 }}>{report.plan.dockerfile}</pre>
                 </Collapsible>
               )}
-              <Collapsible title="Files in the repository root" right={<span className="faint small">{inspect.data.files.length}</span>}>
+              <Collapsible title={inspect.data.rootDirectory ? "Files in the repository root (the app is in a subfolder)" : "Files in the repository root"} right={<span className="faint small">{inspect.data.files.length}</span>}>
                 <FileList files={inspect.data.files} />
               </Collapsible>
 
@@ -410,7 +445,7 @@ export default function NewAppPage() {
                     <label className="label">Port</label>
                     <input className="input" inputMode="numeric" placeholder={String(report.port ?? "")} value={checkPort} onChange={(e) => setCheckPort(e.target.value.replace(/\D/g, ""))} />
                   </div>
-                  <button className="btn" onClick={runCheck}><RefreshCw size={14} /> Check again</button>
+                  <button className="btn" onClick={() => runCheck()}><RefreshCw size={14} /> Check again</button>
                   <span className="faint small">Change these if the check guessed wrong.</span>
                 </div>
               </div>
@@ -469,7 +504,7 @@ export default function NewAppPage() {
                 {kind !== "image" && report?.env.length ? (
                   <div className="faint small" style={{ marginBottom: 12 }}>Filled in from {report.env[0].source}. Secrets were generated for you; PORT and HOST are set by Deploy King.</div>
                 ) : null}
-                <EnvEditor rows={env} onChange={setEnv} />
+                <EnvEditor rows={env} onChange={setEnv} build={kind !== "image"} />
               </div>
             </div>
 
@@ -508,6 +543,7 @@ export default function NewAppPage() {
               <dl className="kv" style={{ gridTemplateColumns: "84px minmax(0,1fr)" }}>
                 <dt>Source</dt><dd className="ellipsis">{kind === "image" ? image : repoName}</dd>
                 {kind !== "image" && (<><dt>Branch</dt><dd>{branch}</dd></>)}
+                {kind !== "image" && rootDir.trim() && (<><dt>Root directory</dt><dd className="mono">{rootDir.trim()}</dd></>)}
                 {report?.framework && kind !== "image" && (<><dt>Framework</dt><dd>{report.framework}</dd></>)}
                 <dt>URL</dt><dd className="mono small">{url}</dd>
               </dl>
@@ -515,7 +551,8 @@ export default function NewAppPage() {
               <div className="faint small" style={{ marginTop: 14 }}>
                 The build log streams live. If something comes up mid-deploy (a different port, another Node.js version), the deploy pauses and asks you here.
               </div>
-              <button className="btn btn-primary btn-lg btn-block" style={{ marginTop: 16 }} disabled={create.isLoading || !domain || (useCustom ? !customDomain : !name)} onClick={deploy}>
+              <div style={{ marginTop: 14 }}><FitNotice state={fit} /></div>
+              <button className="btn btn-primary btn-lg btn-block" style={{ marginTop: 16 }} disabled={create.isLoading || fit.blocked || !domain || (useCustom ? !customDomain : !name)} onClick={deploy}>
                 {create.isLoading ? <Spinner /> : <><Rocket size={15} /> Deploy</>}
               </button>
               <button className="btn btn-ghost btn-block" style={{ marginTop: 6 }} onClick={() => setStep(kind === "image" ? "source" : "check")}>

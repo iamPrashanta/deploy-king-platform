@@ -18,6 +18,15 @@ const nextConfig = {
         destination: "http://localhost:4000/hooks/:path*",
       },
       {
+        // MCP server for AI agents, and the guide they read first
+        source: "/mcp",
+        destination: "http://localhost:4000/mcp",
+      },
+      {
+        source: "/llms.txt",
+        destination: "http://localhost:4000/llms.txt",
+      },
+      {
         // GitHub can reach the API through the panel's address
         source: "/webhooks/:path*",
         destination: "http://localhost:4000/webhooks/:path*",
