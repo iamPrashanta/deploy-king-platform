@@ -500,7 +500,7 @@ export function analyzeProject(dir: string, site: SiteBuildSettings = { type: "a
     checks.push({ id: "compose", level: "warn", title: `${compose} found`, detail: "Deploy King deploys one service per app, so only the main app is built. Add each other service (database, worker) separately." });
   }
   if (isMonorepo(dir, pkg)) {
-    checks.push({ id: "monorepo", level: "warn", title: "Monorepo", detail: "The whole repository is built as one app. Add a Dockerfile that builds the app you want to serve." });
+    checks.push({ id: "monorepo", level: "warn", title: "Monorepo", detail: "The whole repository is built as one app. Set Root directory to the app's folder, or, if the app needs other packages from the workspace, add a Dockerfile at the repository root that builds it." });
   }
   if (stats.bytes > 500 * 1024 ** 2) {
     checks.push({ id: "size", level: "warn", title: `Large repository (${formatBytes(stats.bytes)})`, detail: "Builds will be slow. Keep build output and media out of git." });

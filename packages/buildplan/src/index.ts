@@ -460,4 +460,72 @@ export function slugify(input: string): string {
   );
 }
 
+// ─── Root directory (monorepos) ───────────────────────────────────────────────
+/**
+ * Cleans a "root directory" setting: a folder inside the repository to build from.
+ * Returns null for the repository root. Throws when the value could leave the repository.
+ */
+export function normalizeRootDirectory(input: string | null | undefined): string | null {
+  const raw = String(input ?? "").trim().replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/^\/+|\/+$/g, "");
+  if (!raw || raw === ".") return null;
+  if (raw.length > 255) throw new Error("The root directory is too long");
+  const parts = raw.split("/");
+  if (parts.some((p) => p === "" || p === "." || p === "..")) throw new Error("The root directory must be a folder inside the repository, like apps/web");
+  if (!/^[A-Za-z0-9._@ +-]+(\/[A-Za-z0-9._@ +-]+)*$/.test(raw)) throw new Error("The root directory has characters that are not allowed");
+  return raw;
+}
+
+/** The folder to build: the repository, or the root directory inside it. Throws when that folder is missing. */
+export function resolveBuildRoot(repoDir: string, rootDirectory: string | null | undefined): string {
+  const rel = normalizeRootDirectory(rootDirectory);
+  if (!rel) return repoDir;
+  const full = path.resolve(repoDir, rel);
+  if (!full.startsWith(path.resolve(repoDir) + path.sep)) throw new Error("The root directory must be inside the repository");
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.lstatSync(full);
+  } catch {}
+  if (!stat || !stat.isDirectory()) throw new Error(`There is no folder "${rel}" in this repository`);
+  return full;
+}
+
+const APP_MARKERS = ["package.json", "Dockerfile", "requirements.txt", "pyproject.toml", "go.mod", "composer.json", "index.html"];
+const SKIP_DIRS = new Set(["node_modules", "dist", "build", "vendor", "docs", "test", "tests", "scripts"]);
+
+/** Folders that look like apps of their own, for choosing a root directory in a multi-app repository. */
+export function appFolders(repoDir: string): string[] {
+  const out: string[] = [];
+  const dirs = (d: string) => {
+    try {
+      return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS.has(e.name)).map((e) => e.name);
+    } catch {
+      return [];
+    }
+  };
+  const isApp = (d: string) => APP_MARKERS.some((m) => fs.existsSync(path.join(d, m)));
+  for (const a of dirs(repoDir)) {
+    const full = path.join(repoDir, a);
+    if (isApp(full)) out.push(a);
+    // one level further for the usual grouping folders (apps/web, services/api, packages/site)
+    for (const b of dirs(full)) if (isApp(path.join(full, b))) out.push(`${a}/${b}`);
+    if (out.length >= 40) break;
+  }
+  return out.sort((x, y) => x.split("/").length - y.split("/").length || x.localeCompare(y)).slice(0, 40);
+}
+
+// ─── Build-time variables ─────────────────────────────────────────────────────
+/**
+ * Makes build-time variables visible to every stage of a generated Dockerfile.
+ * Frameworks such as Next.js and Vite read NEXT_PUBLIC_* / VITE_* while building, not when starting.
+ */
+export function withBuildArgs(dockerfile: string, keys: string[]): string {
+  const safe = keys.filter((k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k));
+  if (!safe.length) return dockerfile;
+  const block = safe.map((k) => `ARG ${k}\nENV ${k}=$${k}`).join("\n");
+  return dockerfile
+    .split("\n")
+    .map((line) => (/^\s*FROM\s/i.test(line) ? `${line}\n${block}` : line))
+    .join("\n");
+}
+
 export * from "./analyze";
