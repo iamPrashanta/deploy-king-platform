@@ -1,0 +1,61 @@
+// new-app flow on a repository with several apps: the check offers the folders, picking one re-checks it,
+// and the Configure step has a Build switch per variable
+import { createRequire } from "node:module";
+import fs from "node:fs";
+const require = createRequire("/tmp/shot/package.json");
+const puppeteer = require("puppeteer-core");
+import { login, PW, pass } from "/t/lib.mjs";
+const out = "/tmp/shots";
+fs.mkdirSync(out, { recursive: true });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const auth = await login("admin", PW);
+const errors = [];
+const browser = await puppeteer.launch({ executablePath: "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] });
+const page = await browser.newPage();
+await page.setViewport({ width: 1440, height: 900 });
+await page.evaluateOnNewDocument((t) => { localStorage.setItem("token", t); localStorage.setItem("dk-theme", "dark"); }, auth.token);
+page.on("pageerror", (e) => errors.push(String(e.message).slice(0, 200)));
+const shot = (name) => page.screenshot({ path: `${out}/${name}.jpg`, type: "jpeg", quality: 80 });
+const scrollMain = (y) => page.evaluate((y) => document.querySelector(".scroll")?.scrollTo(0, y), y);
+try {
+  await page.goto("http://localhost:3000/apps/new", { waitUntil: "networkidle0", timeout: 30000 });
+  await page.click("::-p-text(Public Git URL)");
+  await page.type("input.input.mono", "https://github.com/docker/awesome-compose");
+  await page.waitForSelector("::-p-text(Check project)", { timeout: 30000 });
+  await sleep(2500);
+  const hasField = await page.evaluate(() => [...document.querySelectorAll("label.label")].some((l) => l.textContent === "Root directory"));
+  pass(hasField, "the source step has a Root directory field");
+  await shot("root-source");
+  await page.click("::-p-text(Check project)");
+  await page.waitForSelector("::-p-text(What we found)", { timeout: 120000 });
+  await sleep(500);
+  const chips = await page.evaluate(() => [...document.querySelectorAll(".chip-btn")].map((b) => b.textContent));
+  pass(chips.includes("apache-php/app") && chips[0] === "Repository root" && chips.some((c) => c.startsWith("Show all")), "the check offers the app folders", `${chips.length} shown`);
+  await shot("root-folders");
+  await page.evaluate(() => [...document.querySelectorAll(".chip-btn")].find((b) => b.textContent === "apache-php/app").click());
+  await page.waitForFunction(() => /Checked the folder/.test(document.body.textContent) && /What we found/.test(document.body.textContent), { timeout: 120000 });
+  await sleep(600);
+  const on = await page.evaluate(() => document.querySelector(".chip-btn.on")?.textContent);
+  pass(on === "apache-php/app", "picking a folder re-runs the check on it", on);
+  await shot("root-checked");
+  await scrollMain(9999);
+  await page.click("::-p-text(Continue)");
+  await sleep(800);
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent.includes("Add variable")).click());
+  await sleep(200);
+  const keyInput = await page.$('input[placeholder="KEY"]');
+  await keyInput.type("NEXT_PUBLIC_API_URL");
+  await sleep(200);
+  const checked = await page.evaluate(() => { const l = [...document.querySelectorAll("label")].find((x) => x.textContent.trim() === "Build"); return l ? l.querySelector("input").checked : null; });
+  pass(checked === true, "a NEXT_PUBLIC_ variable gets Build switched on by default", String(checked));
+  await page.evaluate(() => { const l = [...document.querySelectorAll("label")].find((x) => x.textContent.trim() === "Build"); l.scrollIntoView({ block: "center" }); });
+  await sleep(300);
+  await shot("root-configure");
+  const summary = await page.evaluate(() => document.body.textContent.includes("Root directory") && document.body.textContent.includes("apache-php/app"));
+  pass(summary, "the summary shows the root directory");
+} catch (e) {
+  console.log("FAIL  " + e.message);
+  await shot("root-error");
+}
+console.log(errors.length ? "PAGE ERRORS: " + errors.join(" | ") : "no page errors");
+await browser.close();

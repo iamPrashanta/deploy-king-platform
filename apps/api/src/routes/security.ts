@@ -6,15 +6,13 @@ import {
 import { eq, like, sql, desc, lt, and } from "drizzle-orm";
 import crypto from "node:crypto";
 import { reconcileNodeSecurity } from "../services/security-reconciler";
+import { INTERNAL_SECRET, safeEqual } from "../config";
 
 const router = Router();
 
 // Middleware to verify internal requests
 router.use((req, res, next) => {
-  const internalSecret = process.env.INTERNAL_SECRET || "dbbkp-internal-secret-change-me";
-  const providedKey = req.headers["x-internal-key"];
-
-  if (providedKey !== internalSecret) {
+  if (!safeEqual(req.headers["x-internal-key"], INTERNAL_SECRET)) {
     console.warn(`[Security API] Unauthorized attempt from ${req.ip}`);
     res.status(403).json({ error: "Forbidden: Invalid internal key" });
     return;

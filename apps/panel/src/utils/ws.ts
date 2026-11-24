@@ -26,7 +26,7 @@ const state: SocketState = {
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = localStorage.getItem("dbbkp_token");
+    const raw = localStorage.getItem("token");
     return raw ?? null;
   } catch {
     return null;

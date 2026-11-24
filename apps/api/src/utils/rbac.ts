@@ -1,5 +1,6 @@
 import { db, users, userRoles, roles, rolePermissions, permissions } from "@dbbkp/db";
 import { eq, and } from "drizzle-orm";
+import { memberPermissions, type TeamRole } from "../services/team";
 
 /**
  * RBAC System
@@ -26,10 +27,15 @@ export async function getUserPermissions(userId: string): Promise<string[]> {
 }
 
 export async function hasPermission(userId: string, permissionKey: string): Promise<boolean> {
+  const [user] = await db.select({ role: users.role, teamRole: users.teamRole, grants: users.grants, suspendedAt: users.suspendedAt }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!user || user.suspendedAt) return false;
   // Short-circuit: System admins get everything
-  const [user] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
-  if (user?.role === "admin") return true;
+  if (user.role === "admin") return true;
+  // Team members: the role and its per-member extras decide.
+  if (user.teamRole) return memberPermissions(user.teamRole as TeamRole, user.grants).has(permissionKey);
 
+  // Users from before teams existed: the role tables decide, and they keep the right to make agent tokens.
+  if (permissionKey === PERMISSIONS.AGENT_TOKENS) return true;
   const userPerms = await getUserPermissions(userId);
   return userPerms.includes(permissionKey);
 }
@@ -48,6 +54,7 @@ export const PERMISSIONS = {
   NODE_MANAGE: "node.manage",
   SECURITY_RESOLVE: "security.resolve",
   AUDIT_VIEW: "audit.view",
+  AGENT_TOKENS: "agent.tokens",
 } as const;
 
 /**

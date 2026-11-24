@@ -1,0 +1,11 @@
+# The one image the local test environment needs: Node, pnpm, git, and a browser for the panel checks.
+FROM docker.io/library/node:22-bookworm
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends chromium git rsync zip unzip curl procps python3-minimal ca-certificates fonts-liberation \
+ && rm -rf /var/lib/apt/lists/*
+RUN npm install -g pnpm@9
+# The browser checks load puppeteer-core from here (linked to /tmp/shot by setup.sh).
+RUN mkdir -p /opt/shot && cd /opt/shot && npm init -y > /dev/null && npm install puppeteer-core@24 > /dev/null
+ENV NEXT_TELEMETRY_DISABLED=1
+WORKDIR /work
+CMD ["sleep", "infinity"]

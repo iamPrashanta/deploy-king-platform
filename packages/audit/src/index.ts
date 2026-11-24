@@ -12,6 +12,9 @@ export type AuditAction =
   | "file_read"
   | "cron_create"
   | "cron_delete"
+  | "cron_update"
+  | "cron_run"
+  | "worker_change"
   | "db_create"
   | "db_delete"
   | "secret_set"
@@ -26,7 +29,27 @@ export type AuditAction =
   | "threat_detected"
   | "threat_resolved"
   | "user_create"
-  | "user_delete";
+  | "user_delete"
+  | "intent_authorized"
+  | "intent_denied"
+  | "api_token_create"
+  | "api_token_revoke"
+  | "capacity_override"
+  | "capacity_settings"
+  | "cleanup_run"
+  | "cleanup_remove"
+  | "cleanup_settings"
+  | "host_baseline_accept"
+  | "host_finding_decide"
+  | "host_remove"
+  | "host_undo"
+  | "team_invite"
+  | "team_invite_cancel"
+  | "team_accept"
+  | "team_member_update"
+  | "team_member_suspend"
+  | "team_member_remove"
+  | "access_request_decide";
 
 export interface AuditContext {
   /** UUID of the user performing the action */

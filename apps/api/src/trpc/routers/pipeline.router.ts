@@ -1,9 +1,11 @@
-import { router, protectedProcedure, adminProcedure } from "../trpc";
+// Servers, host jobs and pipelines belong to the whole installation, not to one member: admins only.
+import { router, adminProcedure } from "../trpc";
 import { z } from "zod";
 import { db, jobs, pipelines, pipelineRuns } from "@dbbkp/db";
 import { eq, sql } from "drizzle-orm";
 import { pipelineQueue } from "../../queues";
 import { TRPCError } from "@trpc/server";
+import { enqueuePipelineRun } from "../../services/pipelines";
 
 // ─── UTILITIES (HARDENED) ────────────────────────────────────────────────────
 
@@ -68,7 +70,7 @@ try {
 
 export const pipelineRouter = router({
   // ─── Dashboard ─────────────────────────────────────────────────────────────
-  dashboard: protectedProcedure.query(async () => {
+  dashboard: adminProcedure.query(async () => {
     try {
       const [pipelineList, runList] = await Promise.all([
         db.select().from(pipelines).orderBy(sql`created_at DESC`),
@@ -101,12 +103,12 @@ export const pipelineRouter = router({
   }),
 
   // ─── List Pipelines ────────────────────────────────────────────────────────
-  list: protectedProcedure.query(async () => {
+  list: adminProcedure.query(async () => {
     return db.select().from(pipelines).orderBy(sql`created_at DESC`);
   }),
 
   // ─── Get Single Pipeline ───────────────────────────────────────────────────
-  get: protectedProcedure
+  get: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const [p] = await db.select().from(pipelines).where(eq(pipelines.id, input.id)).limit(1);
@@ -184,51 +186,18 @@ export const pipelineRouter = router({
     }),
 
   // ─── Trigger Pipeline Run ──────────────────────────────────────────────────
-  run: protectedProcedure
+  run: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input }) => {
       const [p] = await db.select().from(pipelines).where(eq(pipelines.id, input.id)).limit(1);
       if (!p) throw new TRPCError({ code: "NOT_FOUND" });
       if (!p.enabled) throw new TRPCError({ code: "BAD_REQUEST", message: "Pipeline is disabled" });
 
-      // 1. Create a run record with absolute safety
-      const [run] = await db.insert(pipelineRuns).values(assertClean({
-        pipelineId: p.id,
-        status: "waiting",
-        runner: process.env.PIPELINE_ISOLATION ?? "docker",
-        image: process.env.PIPELINE_DOCKER_IMAGE ?? "node:20-bookworm",
-      })).returning();
-
-      // 2. Prepare payload
-      const runPayload = deepClean({
-        runId: run.id,
-        pipelineId: p.id,
-        repoUrl: p.repoUrl,
-        branch: p.branch ?? "main",
-        buildCommand: p.buildCommand ?? null,
-        deployCommand: p.deployCommand ?? null,
-        envVars: p.envVars ? JSON.parse(p.envVars) : {},
-      });
-
-      const [dbJob] = await db.insert(jobs).values(assertClean({
-        type: "pipeline",
-        name: p.name,
-        status: "waiting",
-        payload: JSON.stringify(runPayload),
-      })).returning();
-
-      // 3. Enqueue job
-      const job = await pipelineQueue.add("pipeline-run", { ...runPayload, dbJobId: dbJob.id });
-
-      // 4. Update bullJobId refs
-      await db.update(pipelineRuns).set({ bullJobId: String(job.id) }).where(eq(pipelineRuns.id, run.id));
-      await db.update(jobs).set({ bullJobId: String(job.id) }).where(eq(jobs.id, dbJob.id));
-
-      return { jobId: job.id, runId: run.id };
+      return enqueuePipelineRun(p);
     }),
 
   // ─── List Runs ─────────────────────────────────────────────────────────────
-  runs: protectedProcedure
+  runs: adminProcedure
     .input(z.object({ pipelineId: z.string().uuid() }))
     .query(async ({ input }) => {
       return db.select().from(pipelineRuns)
@@ -238,7 +207,7 @@ export const pipelineRouter = router({
     }),
 
   // ─── Get Single Run ────────────────────────────────────────────────────────
-  runById: protectedProcedure
+  runById: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const [run] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, input.id)).limit(1);
@@ -248,7 +217,7 @@ export const pipelineRouter = router({
     }),
 
   // ─── Get Run Logs ──────────────────────────────────────────────────────────
-  log: protectedProcedure
+  log: adminProcedure
     .input(z.object({ runId: z.string().uuid() }))
     .query(async ({ input }) => {
       const [run] = await db.select({

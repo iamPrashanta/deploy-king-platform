@@ -5,7 +5,7 @@ import { db, sessions, users } from "@dbbkp/db";
 import { eq } from "drizzle-orm";
 import { hasPermission } from "../utils/rbac";
 
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
+import { JWT_SECRET } from "../config";
 
 export type Context = {
   user: { 
@@ -16,6 +16,8 @@ export type Context = {
     mustChangePassword: boolean;
   } | null;
   ip: string | null;
+  /** Set when the call comes from an AI agent's token through /mcp (there is no browser session). */
+  apiToken?: { id: string; scope: string } | null;
 };
 
 export function createContext({ req }: { req: any }): Context {
@@ -55,6 +57,15 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next, path }) =>
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
 
+  if (ctx.apiToken) {
+    // The token was checked when the /mcp request came in. There is no session to
+    // refresh, but the user must still exist and must not be locked behind a password change.
+    const [u] = await db.select({ mustChangePassword: users.mustChangePassword, suspendedAt: users.suspendedAt }).from(users).where(eq(users.id, ctx.user.sub)).limit(1);
+    if (!u || u.suspendedAt) throw new TRPCError({ code: "UNAUTHORIZED" });
+    if (u.mustChangePassword) throw new TRPCError({ code: "FORBIDDEN", message: "PASSWORD_ROTATION_REQUIRED" });
+    return next();
+  }
+
   try {
     // 1. Fetch Session AND User Flag from DB (Absolute Source of Truth)
     const [sessionWithUser] = await db
@@ -63,6 +74,8 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next, path }) =>
         expiresAt: sessions.expiresAt,
         lastActivityAt: sessions.lastActivityAt,
         mustChangePassword: users.mustChangePassword,
+        suspendedAt: users.suspendedAt,
+        role: users.role,
       })
       .from(sessions)
       .innerJoin(users, eq(sessions.userId, users.id))
@@ -72,6 +85,11 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next, path }) =>
     if (!sessionWithUser) {
       throw new TRPCError({ code: "UNAUTHORIZED", message: "Session not found" });
     }
+    if (sessionWithUser.suspendedAt) {
+      throw new TRPCError({ code: "UNAUTHORIZED", message: "This account is suspended" });
+    }
+    // The role in the token can be out of date after an admin changed it; the database is the truth.
+    ctx.user.role = sessionWithUser.role;
 
     // 2. Mandatory Password Rotation Enforcement (Real-time DB check)
     if (sessionWithUser.mustChangePassword && path !== "auth.changePassword") {

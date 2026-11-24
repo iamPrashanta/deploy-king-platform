@@ -4,6 +4,7 @@ import { connection } from "./connection";
 import { db, jobs, pipelineRuns, pipelineLogs } from "@dbbkp/db";
 import { eq } from "drizzle-orm";
 import { spawn } from "child_process";
+import execa from "execa";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -26,12 +27,17 @@ const dockerMemory = process.env.PIPELINE_DOCKER_MEMORY || "1g";
 const dockerCpus = process.env.PIPELINE_DOCKER_CPUS || "1";
 const dockerNetwork = process.env.PIPELINE_DOCKER_NETWORK || "bridge";
 
+// Where the API is reachable from this worker. In containers that is the API's
+// service name, not localhost.
+const apiBaseUrl = (
+  process.env.API_INTERNAL_URL || `http://localhost:${process.env.API_PORT || process.env.PORT || "4000"}`
+).replace(/\/+$/, "");
+
 async function sendLog(jobId: string, msg: string, type: "log" | "error" | "done" = "log") {
-  const apiPort = process.env.API_PORT || process.env.PORT || "4000";
   const internalSecret = process.env.INTERNAL_SECRET || "dbbkp-internal-secret-change-me";
   
   try {
-    await fetch(`http://localhost:${apiPort}/internal/log`, {
+    await fetch(`${apiBaseUrl}/internal/log`, {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
@@ -210,6 +216,9 @@ export const pipelineWorker = new Worker<PipelineJobData>(
   async (job) => {
     if (job.name !== "pipeline-run") return;
 
+    const { runId, dbJobId, repoUrl, branch, buildCommand, deployCommand } = job.data;
+    const envVars: Record<string, string> = job.data.envVars ?? {};
+
     const volumeName = `dbbkp-ws-${job.id}`;
     const jid = String(job.id);
     const startedAt = new Date();
@@ -240,7 +249,7 @@ export const pipelineWorker = new Worker<PipelineJobData>(
         await sendLog(jid, "Cloning repository into volume...\n");
         const clone = await streamProcess(
           "docker", 
-          ["run", "--rm", "-v", `${volumeName}:/workspace`, "-w", "/workspace", "alpine/git", "clone", "-b", branch, repoUrl, "."],
+          ["run", "--rm", "-v", `${volumeName}:/workspace`, "-w", "/workspace", "alpine/git", "clone", "--depth=1", "-b", branch, "--", repoUrl, "."],
           process.cwd(),
           jid,
           runId
@@ -248,7 +257,7 @@ export const pipelineWorker = new Worker<PipelineJobData>(
         if (clone.code !== 0) throw new Error(`git clone failed: ${clone.stderr || clone.stdout}`);
       } else {
         const workDir = path.join(os.tmpdir(), `dbbkp-pipeline-${job.id}`);
-        const clone = await streamProcess("git", ["clone", "-b", branch, repoUrl, "."], workDir, jid, runId);
+        const clone = await streamProcess("git", ["clone", "--depth=1", "-b", branch, "--", repoUrl, "."], workDir, jid, runId);
         if (clone.code !== 0) throw new Error(`git clone failed: ${clone.stderr || clone.stdout}`);
       }
 

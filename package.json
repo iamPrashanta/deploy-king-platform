@@ -1,6 +1,7 @@
 {
   "name": "dbbkp-platform",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "packageManager": "pnpm@9.12.3",
   "workspaces": [
     "apps/*",
@@ -13,7 +14,11 @@
     "postinstall": "node sync-scripts.js",
     "sync:scripts": "node sync-scripts.js",
     "dev:clean": "pkill -9 node || true && rm -rf node_modules .turbo && pnpm install && pnpm dev",
-    "migrate:pipeline-runs": "tsx scripts/migrate-pipeline-run-metadata.ts"
+    "migrate:pipeline-runs": "tsx scripts/migrate-pipeline-run-metadata.ts",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "db:generate": "pnpm --filter @dbbkp/db db:generate",
+    "db:migrate": "pnpm --filter @dbbkp/db db:migrate",
+    "db:seed": "pnpm --filter @dbbkp/db db:seed"
   },
   "devDependencies": {
     "turbo": "^1.10.15",

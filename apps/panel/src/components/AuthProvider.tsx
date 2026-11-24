@@ -1,5 +1,6 @@
 "use client";
 
+import { isOpenPath } from "@/components/paths";
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { trpc } from "@/utils/trpc";
@@ -49,7 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const handleLogout = () => {
     localStorage.removeItem("token");
     setUser(null);
-    if (pathname !== "/login") {
+    if (pathname !== "/login" && !isOpenPath(pathname)) {
       router.push("/login");
     }
   };
@@ -58,6 +59,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!isClient) return;
 
     const token = localStorage.getItem("token");
+    // Accepting an invitation and asking for access work with or without a session.
+    if (isOpenPath(pathname)) return;
     const isPublicPath = pathname === "/login";
 
     if (!token && !isPublicPath) {

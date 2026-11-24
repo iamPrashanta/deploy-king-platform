@@ -1,4 +1,5 @@
-import { router, protectedProcedure, adminProcedure } from "../trpc";
+import { router, protectedProcedure, adminProcedure, permissionProcedure } from "../trpc";
+import { PERMISSIONS } from "../../utils/rbac";
 import { z } from "zod";
 import { db, auditLogs, secrets } from "@dbbkp/db";
 import { eq, sql, desc } from "drizzle-orm";
@@ -6,7 +7,7 @@ import { encrypt, decrypt } from "@dbbkp/security";
 
 export const auditRouter = router({
   // ─── Audit Log List ─────────────────────────────────────────────────────────
-  list: protectedProcedure
+  list: permissionProcedure(PERMISSIONS.AUDIT_VIEW)
     .input(z.object({ limit: z.number().min(1).max(500).default(100) }))
     .query(async ({ input }) => {
       return db

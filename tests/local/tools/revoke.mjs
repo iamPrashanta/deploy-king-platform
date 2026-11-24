@@ -1,0 +1,24 @@
+// debug: revoke a token from the AI agents page and capture what the page shows
+import { createRequire } from "node:module";
+const require = createRequire("/tmp/shot/package.json");
+const puppeteer = require("puppeteer-core");
+import { call, login, PW } from "/t/lib.mjs";
+const auth = await login("admin", PW);
+await call("m", "mcp.createToken", { name: "revoke me", scope: "read", expiresInDays: 7 });
+const browser = await puppeteer.launch({ executablePath: "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] });
+const page = await browser.newPage();
+await page.setViewport({ width: 1440, height: 900 });
+await page.evaluateOnNewDocument((t) => { localStorage.setItem("token", t); localStorage.setItem("dk-theme", "dark"); }, auth.token);
+page.on("console", (m) => console.log("console:", m.type(), m.text().slice(0, 200)));
+await page.goto("http://localhost:3000/agents", { waitUntil: "networkidle0" });
+const buttons = await page.evaluate(() => [...document.querySelectorAll("button")].map((b) => b.textContent.trim()).filter((t) => /Revoke/.test(t)));
+console.log("revoke buttons:", JSON.stringify(buttons));
+await page.evaluate(() => [...document.querySelectorAll("table button")].find((b) => b.textContent.includes("Revoke")).click());
+await new Promise((r) => setTimeout(r, 500));
+console.log("dialogs:", await page.evaluate(() => [...document.querySelectorAll(".dialog")].map((d) => d.textContent.slice(0, 120))));
+await page.evaluate(() => [...document.querySelectorAll(".dialog .df button")].find((b) => b.textContent.includes("Revoke")).click());
+await new Promise((r) => setTimeout(r, 2500));
+console.log("after:", await page.evaluate(() => [...document.querySelectorAll(".dialog")].map((d) => d.textContent.slice(0, 120))));
+await page.screenshot({ path: "/tmp/shots/revoke-after.jpg", type: "jpeg", quality: 70 });
+console.log("tokens:", (await call("q", "mcp.tokens")).length);
+await browser.close();

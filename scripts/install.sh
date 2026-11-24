@@ -8,6 +8,8 @@
 #   sudo bash install.sh --mode agent-only # Agent only (no panel)
 #   sudo bash install.sh --domain example.com
 #   sudo bash install.sh --dry-run        # Show plan without making changes
+#   sudo bash install.sh --yes            # Accept the plan without being asked
+#   sudo bash install.sh --force          # Install next to another control panel (side by side)
 # ==============================================================================
 
 set -Eeo pipefail
@@ -23,12 +25,16 @@ DB_NAME="dbbkp_panel"
 INSTALL_MODE=""      # clean | existing-panel | docker-only | agent-only
 USER_DOMAIN=""
 DRY_RUN=false
+FORCE=false        # install next to another control panel
+ASSUME_YES=false   # accept the plan without asking
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --mode)     INSTALL_MODE="$2"; shift 2 ;;
     --domain)   USER_DOMAIN="$2";  shift 2 ;;
     --dry-run)  DRY_RUN=true;      shift   ;;
+    --force)    FORCE=true;        shift   ;;
+    --yes|-y)   ASSUME_YES=true;   shift   ;;
     *)          shift ;;
   esac
 done
@@ -95,7 +101,7 @@ if [[ "$ARCH" != "x86_64" && "$ARCH" != "aarch64" ]]; then
 fi
 ok "Arch: $ARCH"
 
-# ── Resource checks ───────────────────────────────────────────────────────────
+# ── Resource checks ───────────────────────────────────────────────────────
 RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
 DISK_GB=$(df -BG "$INSTALL_DIR" | awk 'NR==2 {gsub("G",""); print $4}')
 CPU_CORES=$(nproc)
@@ -107,24 +113,111 @@ if [[ "$DISK_GB" -lt 5 ]]; then
   err "Insufficient disk: ${DISK_GB}GB available at $INSTALL_DIR, 5GB minimum required."
 fi
 
+# Enough to install, but tight once apps are added. Shown in the plan and asked about before anything changes.
+LOW_RESOURCES=()
+[[ "$RAM_MB" -lt 1900 ]] && LOW_RESOURCES+=("Memory is ${RAM_MB} MB. 2 GB or more is recommended; with less, only one or two small apps will fit.")
+[[ "$DISK_GB" -lt 10 ]] && LOW_RESOURCES+=("Free disk is ${DISK_GB} GB. 10 GB or more is recommended; builds and images fill a small disk quickly.")
+
 ok "Resources: ${RAM_MB}MB RAM, ${DISK_GB}GB disk, ${CPU_CORES} CPU cores"
 
-# ── Existing panel detection ───────────────────────────────────────────────────
-DETECTED_PANELS=()
+# ── What already runs on this server (read only: nothing here changes anything) ─
+# Which program listens on a TCP port. Prints nothing when the port is free.
+port_owner() {
+  local line name
+  line=$(ss -H -ltnp 2>/dev/null | awk -v p="$1" '{ n = split($4, a, ":"); if (a[n] == p) { print; exit } }') || true
+  [[ -z "$line" ]] && return 0
+  name=$(sed -n 's/.*users:(("\([^"]*\)".*/\1/p' <<<"$line")
+  echo "${name:-another program}"
+}
 
-[[ -d /usr/local/CyberCP ]]               && DETECTED_PANELS+=("CyberPanel")
-[[ -d /usr/local/psa ]]                   && DETECTED_PANELS+=("Plesk")
-[[ -f /usr/local/cpanel/cpanel ]]         && DETECTED_PANELS+=("cPanel")
-[[ -d /etc/openlitespeed ]]               && DETECTED_PANELS+=("OpenLiteSpeed")
-command -v nginx  &>/dev/null             && DETECTED_PANELS+=("Nginx")
-command -v apache2 &>/dev/null            && DETECTED_PANELS+=("Apache2")
+# Another control panel owns the web server's configuration and rewrites it; two panels on one server undo each other's work.
+CONTROL_PANELS=()
+[[ -f /usr/local/cpanel/cpanel ]]              && CONTROL_PANELS+=("cPanel/WHM")
+[[ -d /usr/local/psa ]]                        && CONTROL_PANELS+=("Plesk")
+[[ -d /usr/local/CyberCP ]]                    && CONTROL_PANELS+=("CyberPanel")
+[[ -d /www/server/panel ]]                     && CONTROL_PANELS+=("aaPanel")
+[[ -d /usr/local/directadmin ]]                && CONTROL_PANELS+=("DirectAdmin")
+[[ -d /usr/local/hestia ]]                     && CONTROL_PANELS+=("HestiaCP")
+[[ -d /usr/local/vesta ]]                      && CONTROL_PANELS+=("VestaCP")
+[[ -d /home/clp ]]                             && CONTROL_PANELS+=("CloudPanel")
+[[ -f /etc/webmin/virtual-server/config ]]     && CONTROL_PANELS+=("Virtualmin")
+[[ -d /data/coolify ]]                         && CONTROL_PANELS+=("Coolify")
+[[ -d /etc/dokploy ]]                          && CONTROL_PANELS+=("Dokploy")
+[[ -d /captain ]]                              && CONTROL_PANELS+=("CapRover")
 
-if [[ ${#DETECTED_PANELS[@]} -gt 0 ]]; then
-  warn "Existing software detected: ${DETECTED_PANELS[*]}"
-  warn "Running in COEXISTENCE mode — ports 80/443 will NOT be touched."
-  [[ -z "$INSTALL_MODE" ]] && INSTALL_MODE="existing-panel"
-else
-  [[ -z "$INSTALL_MODE" ]] && INSTALL_MODE="clean"
+WEB_SERVERS=()
+command -v nginx &>/dev/null                                   && WEB_SERVERS+=("Nginx")
+{ command -v apache2 &>/dev/null || command -v httpd &>/dev/null; } && WEB_SERVERS+=("Apache")
+command -v caddy &>/dev/null                                   && WEB_SERVERS+=("Caddy")
+[[ -d /etc/openlitespeed || -d /usr/local/lsws ]]              && WEB_SERVERS+=("OpenLiteSpeed")
+
+PORT80_OWNER=$(port_owner 80)
+PORT443_OWNER=$(port_owner 443)
+
+# Addresses the existing web server answers for. Names only; no file is copied and no secret is read.
+existing_sites() {
+  {
+    grep -rhoE '^\s*server_name\s+[^;]+' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | sed -E 's/^\s*server_name\s+//' | tr -s ' \t' '\n'
+    grep -rhoiE '^\s*Server(Name|Alias)\s+.+' /etc/apache2/sites-enabled /etc/httpd/conf.d 2>/dev/null | sed -E 's/^\s*\S+\s+//' | tr -s ' \t' '\n'
+  } | grep -vE '^(_|localhost|)$' | sort -u
+}
+EXISTING_SITES=$(existing_sites || true)
+EXISTING_SITE_COUNT=$(grep -c . <<<"$EXISTING_SITES" || true)
+
+OTHER_SERVICES=()
+for pair in "3306:MySQL/MariaDB" "5432:PostgreSQL" "6379:Redis" "27017:MongoDB"; do
+  owner=$(port_owner "${pair%%:*}")
+  [[ -n "$owner" ]] && OTHER_SERVICES+=("${pair#*:} on port ${pair%%:*}")
+done
+EXISTING_CONTAINERS=0
+command -v docker &>/dev/null && EXISTING_CONTAINERS=$(docker ps -q 2>/dev/null | grep -c . || true)
+
+# Kept under its old name for the state file, doctor.sh and update.sh.
+DETECTED_PANELS=("${CONTROL_PANELS[@]}" "${WEB_SERVERS[@]}")
+
+echo ""
+echo -e "  ${BOLD}Found on this server${NC}"
+[[ ${#CONTROL_PANELS[@]} -gt 0 ]] && echo -e "    Control panel : ${YELLOW}${CONTROL_PANELS[*]}${NC}"
+[[ ${#WEB_SERVERS[@]} -gt 0 ]]    && echo -e "    Web server    : ${WEB_SERVERS[*]}"
+[[ -n "$PORT80_OWNER" ]]          && echo -e "    Port 80       : used by ${YELLOW}${PORT80_OWNER}${NC}"
+[[ -n "$PORT443_OWNER" ]]         && echo -e "    Port 443      : used by ${YELLOW}${PORT443_OWNER}${NC}"
+if [[ "$EXISTING_SITE_COUNT" -gt 0 ]]; then
+  echo -e "    Websites      : ${EXISTING_SITE_COUNT} address(es), for example $(head -n 3 <<<"$EXISTING_SITES" | paste -sd, - | sed 's/,/, /g')"
+fi
+[[ ${#OTHER_SERVICES[@]} -gt 0 ]] && echo -e "    Databases     : $(printf '%s; ' "${OTHER_SERVICES[@]}" | sed 's/; $//')"
+[[ "$EXISTING_CONTAINERS" -gt 0 ]] && echo -e "    Containers    : ${EXISTING_CONTAINERS} running"
+if [[ ${#DETECTED_PANELS[@]} -eq 0 && -z "$PORT80_OWNER$PORT443_OWNER" && ${#OTHER_SERVICES[@]} -eq 0 && "$EXISTING_CONTAINERS" -eq 0 && "$EXISTING_SITE_COUNT" -eq 0 ]]; then
+  echo -e "    Nothing that needs care. This looks like a fresh server."
+fi
+echo ""
+
+# ── Another control panel: stop unless forced ─────────────────────────────────
+if [[ ${#CONTROL_PANELS[@]} -gt 0 && "$INSTALL_MODE" != "agent-only" ]]; then
+  if ! $FORCE; then
+    echo -e "${RED}[STOP]${NC} ${CONTROL_PANELS[*]} is installed on this server." >&2
+    echo "       A control panel rewrites the web server's configuration whenever it likes, so the two would" >&2
+    echo "       undo each other's work. Nothing has been changed." >&2
+    echo "       Best: install Deploy King on its own server." >&2
+    echo "       To install here anyway, side by side on other ports: add --force" >&2
+    exit 1
+  fi
+  warn "${CONTROL_PANELS[*]} is installed. Continuing because --force was given; ports 80 and 443 stay with it."
+fi
+
+# ── Install mode ───────────────────────────────────────────────────────────
+# Side by side whenever something else has, or could take, ports 80 and 443. A web server that is
+# installed but stopped still counts: taking its ports would stop it from ever starting again.
+NEEDS_SIDE_BY_SIDE=false
+[[ -n "$PORT80_OWNER$PORT443_OWNER" || ${#DETECTED_PANELS[@]} -gt 0 ]] && NEEDS_SIDE_BY_SIDE=true
+
+if [[ -z "$INSTALL_MODE" ]]; then
+  if $NEEDS_SIDE_BY_SIDE; then INSTALL_MODE="existing-panel"; else INSTALL_MODE="clean"; fi
+elif [[ "$INSTALL_MODE" == "clean" && -n "$PORT80_OWNER$PORT443_OWNER" ]]; then
+  err "--mode clean needs ports 80 and 443, but they are used by ${PORT80_OWNER:-$PORT443_OWNER}. Nothing has been changed. Run without --mode to install side by side."
+fi
+
+if [[ "$INSTALL_MODE" == "existing-panel" ]]; then
+  warn "Installing SIDE BY SIDE: ports 80 and 443 and every existing site stay exactly as they are."
 fi
 
 ok "Install mode: ${BOLD}$INSTALL_MODE${NC}"
@@ -134,8 +227,7 @@ if [[ -f "$STATE_FILE" ]]; then
   warn "Existing dbbkp installation detected at $INSTALL_DIR"
   warn "To upgrade, run: bash scripts/update.sh"
   warn "To reinstall, remove $STATE_FILE first."
-  read -r -p "Continue anyway? This may overwrite config. [y/N]: " CONFIRM
-  [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && { echo "Aborted."; exit 0; }
+  EXISTING_INSTALL=true
 fi
 
 # ==============================================================================
@@ -180,6 +272,48 @@ ok "Traefik: :$TRAEFIK_HTTP / :$TRAEFIK_HTTPS"
 ok "Redis:   :$REDIS_PORT"
 ok "Postgres::$PG_PORT"
 
+# ── The plan, and one question before anything is changed ────────────────────
+# Asks on the terminal even when the script itself arrives through a pipe (curl ... | bash).
+confirm() {
+  local reply=""
+  if $ASSUME_YES || $DRY_RUN; then return 0; fi
+  if [[ -t 0 ]]; then
+    read -r -p "$1 [y/N]: " reply
+  elif (: </dev/tty) 2>/dev/null; then
+    read -r -p "$1 [y/N]: " reply </dev/tty
+  else
+    err "Cannot ask for confirmation without a terminal. Nothing has been changed. Re-run with --yes to accept the plan above."
+  fi
+  [[ "$reply" == "y" || "$reply" == "Y" ]]
+}
+
+echo ""
+echo -e "  ${BOLD}What the installer will do${NC}"
+echo "    - Install Docker if it is missing, and add the system user '$APP_USER'"
+echo "    - Create $INSTALL_DIR, /var/www/sites and /var/log/dbbkp"
+echo "    - Start its own containers: database, queue, proxy, API, worker, panel"
+if [[ "$INSTALL_MODE" == "clean" ]]; then
+  echo "    - Take ports 80 and 443 for the proxy, and open them in the firewall"
+else
+  echo "    - Use ports $TRAEFIK_HTTP and $TRAEFIK_HTTPS for its proxy. Ports 80 and 443 are NOT touched"
+  echo "    - Change no existing website, web server file, cron job or database"
+fi
+echo "    - Add firewall rules for its own ports only. No rule is removed"
+echo "    - Add a read-only scan of this server every 5 minutes, so the panel can show what changes (Security page),"
+echo "      and a helper that removes what you choose there, with a copy kept for undo"
+for line in "${LOW_RESOURCES[@]}"; do
+  echo -e "    ${YELLOW}Note:${NC} $line"
+done
+echo ""
+if [[ "${EXISTING_INSTALL:-false}" == true ]]; then
+  echo -e "    ${YELLOW}Note:${NC} Deploy King is already installed here. Continuing may overwrite its configuration."
+  echo ""
+fi
+if ! confirm "Continue with this plan?"; then
+  echo "Stopped. Nothing has been changed."
+  exit 0
+fi
+
 if $DRY_RUN; then
   echo ""
   warn "DRY-RUN mode — no changes will be made. Showing planned steps only."
@@ -211,7 +345,7 @@ ok "Credentials generated (never stored in plaintext)"
 step "Phase 4: Installing System Dependencies"
 
 run "apt-get update -qq >/dev/null"
-run "apt-get install -y -qq curl wget git sudo jq openssl ca-certificates gnupg lsb-release >/dev/null"
+run "apt-get install -y -qq curl wget git sudo jq openssl ca-certificates gnupg lsb-release python3-minimal >/dev/null"
 ok "Base packages installed"
 
 # ── Docker ────────────────────────────────────────────────────────────────────
@@ -278,7 +412,7 @@ else
 fi
 
 run "mkdir -p $INSTALL_DIR/data/{postgres,redis,letsencrypt}"
-run "mkdir -p $INSTALL_DIR/traefik/rules"
+run "mkdir -p $INSTALL_DIR/traefik/rules $INSTALL_DIR/scan $INSTALL_DIR/scripts $INSTALL_DIR/actions/requests $INSTALL_DIR/actions/results"
 run "mkdir -p /var/www/sites /var/log/dbbkp"
 run "chown -R $APP_USER:$APP_USER $INSTALL_DIR /var/www/sites /var/log/dbbkp"
 ok "Directories created"
@@ -426,6 +560,9 @@ $(echo -e "$TRAEFIK_PORTS" | sed 's/^    //')
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/www/sites:/var/www/sites
       - /var/log/dbbkp:/var/log/dbbkp
+      - ./scan:/host-scan:ro
+      - ./actions/requests:/host-actions/requests
+      - ./actions/results:/host-actions/results:ro
     depends_on:
       dbbkp-postgres:
         condition: service_healthy
@@ -570,12 +707,107 @@ cat > "$STATE_FILE" << STATEEOF
     "postgres": ${PG_PORT}
   },
   "services": ["dbbkp-postgres","dbbkp-redis","dbbkp-traefik","dbbkp-api","dbbkp-worker","dbbkp-agent","dbbkp-panel"],
-  "detectedPanels": [$(printf '"%s",' "${DETECTED_PANELS[@]}" | sed 's/,$//')]
+  "controlPanels": [$(printf '"%s",' "${CONTROL_PANELS[@]}" | sed 's/,$//; s/^"",\{0,1\}$//')],
+  "webServers": [$(printf '"%s",' "${WEB_SERVERS[@]}" | sed 's/,$//; s/^"",\{0,1\}$//')],
+  "port80": "${PORT80_OWNER}",
+  "port443": "${PORT443_OWNER}",
+  "existingSites": ${EXISTING_SITE_COUNT:-0},
+  "detectedPanels": [$(printf '"%s",' "${DETECTED_PANELS[@]}" | sed 's/,$//; s/^"",\{0,1\}$//')]
 }
 STATEEOF
 
 run "chmod 600 $STATE_FILE"
 ok "Install state saved to $STATE_FILE"
+
+# ── Server watch ────────────────────────────────────────────────────────
+# A read-only scan every five minutes (scripts/host-scan.py). Its first list is what the admin reviews
+# on the Security page: everything that was on this server before or at install.
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SRC_DIR/host-scan.py" && -f "$SRC_DIR/install-scan.sh" ]]; then
+  run "cp $SRC_DIR/*.sh $SRC_DIR/host-scan.py $SRC_DIR/host-act.py $INSTALL_DIR/scripts/"
+  if $DRY_RUN; then
+    dry "Would install the server watch (dbbkp-scan.timer)"
+  elif INSTALL_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/scripts/install-scan.sh" >>"$LOG_FILE" 2>&1; then
+    ok "Server watch installed (read-only, every 5 minutes)"
+  else
+    warn "The server watch could not be installed. Later: sudo bash $INSTALL_DIR/scripts/install-scan.sh"
+  fi
+else
+  warn "host-scan.py was not found next to the installer, so the server watch is not installed."
+  info "Copy the scripts folder to $INSTALL_DIR/scripts and run: sudo bash $INSTALL_DIR/scripts/install-scan.sh"
+fi
+
+# ── Side by side: how the existing web server passes addresses on ──────────────
+# Written as files to copy from. The installer never edits the existing web server's configuration.
+SIDE_DIR="$INSTALL_DIR/side-by-side"
+if [[ "$INSTALL_MODE" == "existing-panel" ]] && ! $DRY_RUN; then
+  mkdir -p "$SIDE_DIR"
+  SIDE_NAMES="${USER_DOMAIN:+portal.$USER_DOMAIN *.apps.$USER_DOMAIN}"
+  SIDE_NAMES="${SIDE_NAMES:-portal.example.com *.apps.example.com}"
+  cat > "$SIDE_DIR/nginx.conf" << NGXEOF
+# Deploy King, side by side with the sites Nginx already serves.
+# Nginx keeps ports 80 and 443 and passes only the addresses below on to Deploy King.
+#
+#   1. Put the addresses you want Deploy King to answer for in server_name.
+#   2. Copy this file to /etc/nginx/conf.d/deploy-king.conf
+#   3. Check and reload:  nginx -t && systemctl reload nginx
+#   4. For HTTPS, get a certificate the way you do for your other sites (for example: certbot --nginx).
+#
+# To undo: delete /etc/nginx/conf.d/deploy-king.conf and reload Nginx.
+
+map \$http_upgrade \$deployking_connection {
+  default upgrade;
+  ''      close;
+}
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name ${SIDE_NAMES};
+
+  client_max_body_size 512m;
+
+  location / {
+    proxy_pass http://127.0.0.1:${TRAEFIK_HTTP};
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection \$deployking_connection;
+    proxy_read_timeout 3600s;
+    proxy_buffering off;
+  }
+}
+NGXEOF
+  cat > "$SIDE_DIR/apache.conf" << APEOF
+# Deploy King, side by side with the sites Apache already serves.
+# Apache keeps ports 80 and 443 and passes only the addresses below on to Deploy King.
+#
+#   1. Put the addresses you want Deploy King to answer for in ServerName / ServerAlias.
+#   2. Enable the modules:  a2enmod proxy proxy_http proxy_wstunnel rewrite headers
+#   3. Copy this file to /etc/apache2/sites-available/deploy-king.conf and run: a2ensite deploy-king
+#   4. Check and reload:  apachectl configtest && systemctl reload apache2
+#
+# To undo: a2dissite deploy-king, then reload Apache.
+
+<VirtualHost *:80>
+  ServerName $(awk '{print $1}' <<<"$SIDE_NAMES")
+  ServerAlias $(awk '{print $2}' <<<"$SIDE_NAMES")
+
+  ProxyPreserveHost On
+  RequestHeader set X-Forwarded-Proto expr=%{REQUEST_SCHEME}
+  RewriteEngine On
+  RewriteCond %{HTTP:Upgrade} =websocket [NC]
+  RewriteRule /(.*) ws://127.0.0.1:${TRAEFIK_HTTP}/\$1 [P,L]
+  ProxyPass / http://127.0.0.1:${TRAEFIK_HTTP}/ timeout=3600
+  ProxyPassReverse / http://127.0.0.1:${TRAEFIK_HTTP}/
+</VirtualHost>
+APEOF
+  chmod 644 "$SIDE_DIR/nginx.conf" "$SIDE_DIR/apache.conf"
+  ok "Side-by-side examples written to $SIDE_DIR (nothing was installed into your web server)"
+fi
 
 # ==============================================================================
 # PHASE 12: START PLATFORM
@@ -613,6 +845,11 @@ if [[ ${#DETECTED_PANELS[@]} -gt 0 ]]; then
   echo -e "  ${BOLD}Coexisting with${NC}: ${YELLOW}${DETECTED_PANELS[*]}${NC}"
 fi
 echo ""
+if [[ "$INSTALL_MODE" == "existing-panel" ]]; then
+  echo -e "  ${BOLD}Next step${NC}     : your web server still answers on ports 80 and 443. To give Deploy King"
+  echo -e "                  an address, copy ${CYAN}$SIDE_DIR/nginx.conf${NC} (or apache.conf) as its first lines explain."
+  echo ""
+fi
 echo -e "  ${BOLD}Admin password${NC}: ${YELLOW}${ADMIN_PASS}${NC}"
 echo -e "  ${BOLD}Install log${NC}   : ${LOG_FILE}"
 echo -e "  ${BOLD}State file${NC}    : ${STATE_FILE}"

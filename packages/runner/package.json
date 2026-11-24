@@ -2,9 +2,14 @@
   "name": "@dbbkp/runner",
   "version": "1.0.0",
   "private": true,
-  "main": "runCommand.ts",
-  "types": "runCommand.ts",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@dbbkp/audit": "workspace:*",
+    "@dbbkp/utils": "workspace:*"
+  },
   "devDependencies": {
+    "@types/node": "^20.8.0",
     "typescript": "^5.2.2"
   }
 }

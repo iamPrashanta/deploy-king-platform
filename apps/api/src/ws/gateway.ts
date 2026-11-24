@@ -22,19 +22,20 @@
  *   { channel: "containers",id, payload: { line, ts } }
  */
 
+import { visibleSite } from "../services/team";
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server as HttpServer } from "http";
 import type { IncomingMessage } from "http";
-import jwt from "jsonwebtoken";
 import { spawn } from "node-pty";
 import Docker from "dockerode";
 import crypto from "node:crypto";
 import { db, terminalSessions, containerInstances, sites } from "@dbbkp/db";
+import { eq, and } from "drizzle-orm";
+import { verifyToken, type AuthedUser } from "../middleware/requireAuth";
 import { logAudit } from "@dbbkp/audit";
 import { hasPermission, PERMISSIONS } from "../utils/rbac";
 import { ExecutionBroker } from "@dbbkp/runner";
 
-const JWT_SECRET = process.env.JWT_SECRET ?? "dbbkp-super-secret-change-in-prod";
 const docker = new Docker();
 
 // ─── Subscription registries ──────────────────────────────────────────────────
@@ -78,31 +79,35 @@ function publish(channel: string, id: string, payload: unknown) {
   }
 }
 
-function authenticateToken(token: string): { sub: string; role: string } | null {
-  try {
-    return jwt.verify(token, JWT_SECRET) as { sub: string; role: string };
-  } catch {
-    return null;
-  }
-}
+/**
+ * Resolves a container reference (docker id, or the container name the panel
+ * holds in sites.pm2Name) to the site it belongs to, and returns the site id
+ * only if this user may access it. Admins may access any platform-managed
+ * container; nobody may reach containers the platform does not manage
+ * (the platform's own Postgres/Redis, for example).
+ */
+async function validateContainerOwnership(containerRef: string, user: AuthedUser): Promise<string | null> {
+  let siteId: string | null = null;
 
-async function validateContainerOwnership(containerId: string, userId: string): Promise<string | null> {
-  // 1. Check container_instances for ownership
   const [instance] = await db
-    .select({ siteId: containerInstances.siteId, tenantId: containerInstances.tenantId })
+    .select({ siteId: containerInstances.siteId })
     .from(containerInstances)
-    .where(db._.eq(containerInstances.dockerId, containerId))
+    .where(eq(containerInstances.dockerId, containerRef))
     .limit(1);
+  siteId = instance?.siteId ?? null;
 
-  if (!instance) return null;
+  if (!siteId) {
+    const [byName] = await db
+      .select({ id: sites.id })
+      .from(sites)
+      .where(eq(sites.pm2Name, containerRef))
+      .limit(1);
+    siteId = byName?.id ?? null;
+  }
 
-  // 2. Check if user has access to this site
-  const [site] = await db
-    .select()
-    .from(sites)
-    .where(db._.and(db._.eq(sites.id, instance.siteId), db._.eq(sites.userId, userId)))
-    .limit(1);
-
+  if (!siteId) return null;
+  // Same rule as the API: admins see every app, a member sees their own plus the ones shared with them.
+  const site = await visibleSite(user, siteId);
   return site ? site.id : null;
 }
 
@@ -184,7 +189,7 @@ async function closeTerminal(sessionId: string, userId?: string) {
   const recording = entry.recording.join("");
   await db.update(terminalSessions)
     .set({ status: "closed", endedAt: new Date(), recording })
-    .where(db._.eq(terminalSessions.id, sessionId));
+    .where(eq(terminalSessions.id, sessionId));
 
   logAudit("deploy", { actorId: userId, metadata: { sessionId, action: "terminal_closed" } });
 }
@@ -226,24 +231,34 @@ async function streamContainerLogs(containerId: string) {
 export function setupWebSocketGateway(httpServer: HttpServer) {
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
-  wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
+  wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
     // ── Authentication ──────────────────────────────────────────────────────
+    // Same rule as HTTP: valid JWT *and* a live server-side session, so a
+    // revoked session (logout, password change) cannot keep a socket open.
     const url = new URL(req.url!, "http://localhost");
     const token = url.searchParams.get("token");
 
-    let user: { sub: string; role: string } | null = null;
-    if (token) {
-      user = authenticateToken(token);
+    // Messages can arrive while the session lookup is in flight; hold them.
+    const pending: any[] = [];
+    const hold = (raw: any) => pending.push(raw);
+    ws.on("message", hold);
+
+    let user: AuthedUser | null = null;
+    try {
+      user = await verifyToken(token);
+    } catch (err) {
+      console.error("[WS] Auth lookup failed:", err);
     }
 
     if (!user) {
       ws.close(4001, "Unauthorized");
       return;
     }
+    ws.off("message", hold);
 
     console.log(`[WS] Client connected: ${user.sub}`);
 
-    ws.on("message", async (raw) => {
+    const onMessage = async (raw: any) => {
       let msg: any;
       try {
         msg = JSON.parse(raw.toString());
@@ -260,6 +275,26 @@ export function setupWebSocketGateway(httpServer: HttpServer) {
           ws.send(JSON.stringify({ error: "channel and id required" }));
           return;
         }
+
+        // Authorise before subscribing. Without this any logged-in user could
+        // stream the logs of any container on the host by guessing its name.
+        if (channel === "containers") {
+          const siteId = await validateContainerOwnership(id, user!);
+          if (!siteId) {
+            ws.send(JSON.stringify({ error: "Unauthorized access to container", channel, id }));
+            return;
+          }
+        } else if (channel === "metrics") {
+          const allowed = await hasPermission(user!.sub, PERMISSIONS.NODE_MANAGE);
+          if (!allowed) {
+            ws.send(JSON.stringify({ error: "Permission denied: node.manage", channel, id }));
+            return;
+          }
+        } else if (channel !== "logs") {
+          ws.send(JSON.stringify({ error: `Unknown channel: ${channel}` }));
+          return;
+        }
+
         subscribe(channel, id, ws);
 
         if (channel === "containers") {
@@ -282,7 +317,7 @@ export function setupWebSocketGateway(httpServer: HttpServer) {
         }
 
         // 2. Ownership check
-        const siteId = await validateContainerOwnership(id, user!.sub);
+        const siteId = await validateContainerOwnership(id, user!);
         if (!siteId) {
           ws.send(JSON.stringify({ error: "Unauthorized access to container" }));
           return;
@@ -303,8 +338,8 @@ export function setupWebSocketGateway(httpServer: HttpServer) {
           // Update last activity for reaper
           await db
             .update(terminalSessions)
-            .set({ updatedAt: new Date() } as any)
-            .where(db._.eq(terminalSessions.id, id));
+            .set({ lastActivityAt: new Date() })
+            .where(eq(terminalSessions.id, id));
         }
       }
 
@@ -326,7 +361,14 @@ export function setupWebSocketGateway(httpServer: HttpServer) {
       else if (type === "unsubscribe") {
         if (channel && id) unsubscribe(channel, id, ws);
       }
+    };
+
+    ws.on("message", (raw) => {
+      onMessage(raw).catch((err) => console.error("[WS] Handler error:", err));
     });
+    for (const raw of pending) {
+      onMessage(raw).catch((err) => console.error("[WS] Handler error:", err));
+    }
 
     ws.on("close", () => {
       // Unsubscribe from all channels
@@ -357,7 +399,7 @@ export function setupWebSocketGateway(httpServer: HttpServer) {
       const [dbSession] = await db
         .select()
         .from(terminalSessions)
-        .where(db._.eq(terminalSessions.id, sessionId))
+        .where(eq(terminalSessions.id, sessionId))
         .limit(1);
 
       if (!dbSession) {
@@ -365,7 +407,7 @@ export function setupWebSocketGateway(httpServer: HttpServer) {
         continue;
       }
 
-      const lastActivity = dbSession.updatedAt ? new Date(dbSession.updatedAt).getTime() : new Date(dbSession.startedAt!).getTime();
+      const lastActivity = new Date(dbSession.lastActivityAt ?? dbSession.startedAt!).getTime();
       const startedAt = new Date(dbSession.startedAt!).getTime();
 
       if (now - lastActivity > IDLE_TIMEOUT || now - startedAt > MAX_SESSION_TIME) {

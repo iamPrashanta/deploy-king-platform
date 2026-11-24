@@ -1,0 +1,69 @@
+{
+  "version": "6",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1794659365907,
+      "tag": "0000_superb_phalanx",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1794737874707,
+      "tag": "0001_ancient_newton_destine",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795159456008,
+      "tag": "0002_huge_cable",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1795182031642,
+      "tag": "0003_bouncy_venom",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795184685146,
+      "tag": "0004_rare_otto_octavius",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795185593347,
+      "tag": "0005_parallel_menace",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795186864089,
+      "tag": "0006_thin_lethal_legion",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1795241250926,
+      "tag": "0007_mushy_bullseye",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1795245901583,
+      "tag": "0008_early_the_spike",
+      "breakpoints": true
+    }
+  ]
+}

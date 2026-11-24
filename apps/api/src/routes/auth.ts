@@ -9,7 +9,7 @@ import { logAudit } from "@dbbkp/audit";
 
 const router = Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || "dbbkp-super-secret-change-in-prod";
+import { JWT_SECRET } from "../config";
 const JWT_EXPIRES = process.env.JWT_EXPIRES || "7d";
 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
@@ -96,19 +96,22 @@ router.get("/me", requireAuth, async (req: any, res) => {
   }
 });
 
-// ─── POST /api/auth/register (admin-only, first-time setup) ──────────────────
+// ─── POST /api/auth/register (first-time setup only) ──────────────────
 router.post("/register", async (req, res) => {
   try {
-    const { username, email, password, role = "user" } = z.object({
+    // Creates the first account on an empty installation and nothing else. Once anyone exists, accounts
+    // come from an invitation or an approved access request (see team.router.ts); this route used to
+    // accept anyone, with any role, without signing in.
+    const [existing] = await db.select({ id: users.id }).from(users).limit(1);
+    if (existing) {
+      return res.status(403).json({ error: "Registration is closed. Ask the owner of this panel for an invitation, or request access on the sign-up page." });
+    }
+
+    const { username, email, password } = z.object({
       username: z.string().min(3).max(50),
       email: z.string().email(),
-      password: z.string().min(8),
-      role: z.enum(["admin", "user"]).optional(),
+      password: z.string().min(12),
     }).parse(req.body);
-
-    // Check if admin already exists (first-time setup bypass)
-    const [existingAdmin] = await db.select().from(users).limit(1);
-    const isFirstUser = !existingAdmin;
 
     const passwordHash = await bcrypt.hash(password, 12);
 
@@ -116,7 +119,7 @@ router.post("/register", async (req, res) => {
       username,
       email,
       passwordHash,
-      role: isFirstUser ? "admin" : role,
+      role: "admin",
     }).returning({ id: users.id, username: users.username, role: users.role });
 
     logAudit("user_create", {

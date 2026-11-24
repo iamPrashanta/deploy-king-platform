@@ -19,7 +19,7 @@ const g = globalThis as GlobalWithDb;
 export const queryClient =
   g[DB_KEY] ??
   postgres(connectionString, {
-    max: 10,
+    max: Number(process.env.DB_POOL_MAX) || 10, // connections kept open; tests against an in-memory database use 1
     idle_timeout: 20,
     connect_timeout: 10,
   });

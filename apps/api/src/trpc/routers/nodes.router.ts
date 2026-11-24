@@ -1,11 +1,12 @@
-import { router, protectedProcedure, adminProcedure } from "../trpc";
+// Servers, host jobs and pipelines belong to the whole installation, not to one member: admins only.
+import { router, adminProcedure } from "../trpc";
 import { z } from "zod";
 import { db, nodes, nodeMetrics } from "@dbbkp/db";
 import { eq, desc, and, gt } from "drizzle-orm";
 
 export const nodesRouter = router({
   // ─── List all nodes ─────────────────────────────────────────────────────────
-  list: protectedProcedure.query(async () => {
+  list: adminProcedure.query(async () => {
     return db
       .select({
         id: nodes.id,
@@ -29,7 +30,7 @@ export const nodesRouter = router({
   }),
 
   // ─── Get single node ─────────────────────────────────────────────────────────
-  get: protectedProcedure
+  get: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const [node] = await db.select().from(nodes).where(eq(nodes.id, input.id)).limit(1);
@@ -38,7 +39,7 @@ export const nodesRouter = router({
     }),
 
   // ─── Get recent metrics for a node ──────────────────────────────────────────
-  metrics: protectedProcedure
+  metrics: adminProcedure
     .input(z.object({
       nodeId: z.string().uuid(),
       limit: z.number().min(1).max(500).default(120),
