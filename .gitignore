@@ -56,3 +56,6 @@ dist-ssr/
 *.njsproj
 *.sln
 *.sw?
+
+# Private planning notes (kept on this computer, never committed)
+DESKTOP_APP_PLAN.md
