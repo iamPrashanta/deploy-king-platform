@@ -1,6 +1,7 @@
 {
   "name": "dbbkp-platform",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "packageManager": "pnpm@9.12.3",
   "workspaces": [
     "apps/*",
