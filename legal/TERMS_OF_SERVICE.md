@@ -56,7 +56,7 @@ You must not:
 - sell, rent, sublicense or share access to the Services beyond what your plan allows;
 - use the Services to build a competing product.
 
-Deploy King Desktop and Deploy King Cloud are proprietary. **The open Deploy King server platform** (the code at github.com/iamPrashanta/dbbkp-platform) is licensed separately under the Functional Source License 1.1 with Apache 2.0 future license (FSL-1.1-ALv2). Your rights to that code come from that licence, not from these Terms. Third-party open-source components included in the Services are licensed under their own licences, listed in the app under **About → Licences**.
+Deploy King Desktop and Deploy King Cloud are proprietary. **The open Deploy King server platform** (the code at github.com/iamPrashanta/deploy-king-platform) is licensed separately under the Functional Source License 1.1 with Apache 2.0 future license (FSL-1.1-ALv2). Your rights to that code come from that licence, not from these Terms. Third-party open-source components included in the Services are licensed under their own licences, listed in the app under **About → Licences**.
 
 ## 6. Your content
 

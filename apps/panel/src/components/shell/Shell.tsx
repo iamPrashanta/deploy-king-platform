@@ -224,7 +224,7 @@ function Footer() {
       {info.data && <span className="desktop-only">Apps on *.{info.data.baseDomain}</span>}
       <span className="spacer" />
       <Link href="/backup-cli">Backup CLI</Link>
-      <a href="https://github.com/iamPrashanta/dbbkp-platform" target="_blank" rel="noreferrer">GitHub</a>
+      <a href="https://github.com/iamPrashanta/deploy-king-platform" target="_blank" rel="noreferrer">GitHub</a>
       <Link href="/settings">Server checks</Link>
     </footer>
   );

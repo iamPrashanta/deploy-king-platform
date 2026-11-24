@@ -78,7 +78,7 @@ The panel, the API and the worker run on your computer with `pnpm`. PostgreSQL, 
 **1. Install packages**
 
 ```bash
-git clone https://github.com/iamPrashanta/dbbkp-platform.git deploy-king
+git clone https://github.com/iamPrashanta/deploy-king-platform.git deploy-king
 cd deploy-king
 corepack enable
 pnpm install
@@ -296,7 +296,7 @@ sudo corepack enable
 **2. Get the code**
 
 ```bash
-sudo git clone https://github.com/iamPrashanta/dbbkp-platform.git /opt/deploy-king
+sudo git clone https://github.com/iamPrashanta/deploy-king-platform.git /opt/deploy-king
 cd /opt/deploy-king && sudo pnpm install --frozen-lockfile
 ```
 

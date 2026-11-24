@@ -88,7 +88,7 @@ To deploy an image instead (for example n8nio/n8n:latest), call \`create_app\` w
 Needs a Linux server (Ubuntu 22.04/24.04 or Debian 12) with root access and 2 GB of memory or more. Optional: a domain pointing at the server.
 
 \`\`\`
-git clone https://github.com/iamPrashanta/dbbkp-platform.git /opt/deploy-king-src
+git clone https://github.com/iamPrashanta/deploy-king-platform.git /opt/deploy-king-src
 cd /opt/deploy-king-src
 sudo bash scripts/install.sh --domain panel.example.com
 \`\`\`
