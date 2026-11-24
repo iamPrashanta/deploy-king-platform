@@ -8,6 +8,8 @@ import AdmZip from "adm-zip";
 import { db, sites } from "@dbbkp/db";
 import { desc, eq } from "drizzle-orm";
 import { enqueueDeploy } from "../services/deploy";
+import { DEFAULT_APP_MEMORY_MB, capacity, evaluateFit } from "../services/capacity";
+import { visibleSites } from "../services/team";
 import { hasPermission, PERMISSIONS } from "../utils/rbac";
 import { isValidDomain, normalizeDomain, siteDocRoot } from "../services/validation";
 import type { AuthedUser } from "../middleware/requireAuth";
@@ -40,6 +42,13 @@ router.post("/upload", upload.single("project"), async (req: any, res) => {
 
     const [taken] = await db.select({ id: sites.id }).from(sites).where(eq(sites.domain, domain)).limit(1);
     if (taken) return res.status(409).json({ error: `Domain ${domain} is already in use` });
+
+    // Will it fit? Same rule as apps created from a repository or an image.
+    const fit = evaluateFit(await capacity(), { memoryMb: DEFAULT_APP_MEMORY_MB, newApp: true, builds: true });
+    const deployAnyway = fit.overridable && user.role === "admin" && String(req.body.allowOverCapacity || "") === "true";
+    if (fit.verdict === "blocked" && !deployAnyway) {
+      return res.status(409).json({ error: `This does not fit on the server. ${fit.reasons.map((r) => r.text).join(" ")}`, fit });
+    }
 
     const siteId = crypto.randomUUID();
     const sitePath = siteDocRoot(siteId);
@@ -95,10 +104,7 @@ router.post("/upload", upload.single("project"), async (req: any, res) => {
 router.get("/", async (req: any, res) => {
   try {
     const user: AuthedUser = req.user;
-    const rows =
-      user.role === "admin"
-        ? await db.select().from(sites).orderBy(desc(sites.createdAt))
-        : await db.select().from(sites).where(eq(sites.userId, user.sub)).orderBy(desc(sites.createdAt));
+    const rows = await db.select().from(sites).where(await visibleSites(user)).orderBy(desc(sites.createdAt));
     return res.json(rows);
   } catch (err) {
     return res.status(500).json({ error: "Internal server error" });

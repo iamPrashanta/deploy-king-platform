@@ -8,6 +8,7 @@ import { TRPCError } from "@trpc/server";
 import crypto from "node:crypto";
 
 import { JWT_SECRET } from "../../config";
+import { issueSession } from "../../services/team";
 
 // ─── UTILITIES ───────────────────────────────────────────────────────────────
 
@@ -46,40 +47,8 @@ export const authRouter = router({
 
       const valid = await bcrypt.compare(input.password, user.passwordHash);
       if (!valid) throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
-
-      // 1. Create Server-Side Session (Source of Truth for Inactivity)
-      const sessionId = crypto.randomUUID();
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-
-      await db.insert(sessions).values(assertClean({
-        id: sessionId,
-        userId: user.id,
-        expiresAt,
-      }));
-
-      // 2. Generate JWT including the sid and mcp (must change password) flag
-      const token = jwt.sign(
-        { 
-          sub: user.id, 
-          sid: sessionId, 
-          username: user.username, 
-          role: user.role,
-          mcp: user.mustChangePassword
-        },
-        JWT_SECRET,
-        { expiresIn: "7d" } as jwt.SignOptions
-      );
-
-      return { 
-        token, 
-        user: { 
-          id: user.id, 
-          username: user.username, 
-          email: user.email, 
-          role: user.role,
-          mustChangePassword: user.mustChangePassword
-        } 
-      };
+      if (user.suspendedAt) throw new TRPCError({ code: "FORBIDDEN", message: "This account is suspended. Ask the owner of this panel." });
+      return issueSession(user);
     }),
 
   // Get current user (Verifies session via tRPC middleware)

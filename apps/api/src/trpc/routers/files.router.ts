@@ -1,25 +1,30 @@
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc";
-import { db, sites } from "@dbbkp/db";
-import { eq } from "drizzle-orm";
+import { router, permissionProcedure } from "../trpc";
+import { PERMISSIONS } from "../../utils/rbac";
+import { requireSite } from "../../services/team";
 import fs from "fs-extra";
 import path from "path";
 
 // Utility to ensure we don't traverse out of the docRoot
 function getSafePath(docRoot: string, requestPath: string): string {
-  const safePath = path.normalize(path.join(docRoot, requestPath));
-  if (!safePath.startsWith(docRoot)) {
+  const root = path.resolve(docRoot);
+  const safePath = path.resolve(root, "." + path.posix.normalize("/" + requestPath.replace(/\\/g, "/")));
+  // "startsWith(root)" alone would also accept a sibling folder such as <root>-other.
+  if (safePath !== root && !safePath.startsWith(root + path.sep)) {
     throw new Error("Path traversal blocked");
   }
   return safePath;
 }
 
+// Source files can hold secrets and writing them changes the app, so every call needs the right to deploy
+// (viewers do not have it) on an app this user may see.
+const fileProcedure = permissionProcedure(PERMISSIONS.SITE_DEPLOY);
+
 export const filesRouter = router({
-  list: protectedProcedure
+  list: fileProcedure
     .input(z.object({ siteId: z.string().uuid(), directory: z.string().default("/") }))
-    .query(async ({ input }) => {
-      const [site] = await db.select().from(sites).where(eq(sites.id, input.siteId)).limit(1);
-      if (!site) throw new Error("Site not found");
+    .query(async ({ input, ctx }) => {
+      const site = await requireSite(ctx.user!, input.siteId);
 
       const targetPath = getSafePath(site.docRoot, input.directory);
       
@@ -41,11 +46,10 @@ export const filesRouter = router({
       });
     }),
 
-  readFile: protectedProcedure
+  readFile: fileProcedure
     .input(z.object({ siteId: z.string().uuid(), filePath: z.string() }))
-    .query(async ({ input }) => {
-      const [site] = await db.select().from(sites).where(eq(sites.id, input.siteId)).limit(1);
-      if (!site) throw new Error("Site not found");
+    .query(async ({ input, ctx }) => {
+      const site = await requireSite(ctx.user!, input.siteId);
 
       const targetPath = getSafePath(site.docRoot, input.filePath);
       
@@ -62,11 +66,10 @@ export const filesRouter = router({
       return content;
     }),
 
-  writeFile: protectedProcedure
+  writeFile: fileProcedure
     .input(z.object({ siteId: z.string().uuid(), filePath: z.string(), content: z.string() }))
-    .mutation(async ({ input }) => {
-      const [site] = await db.select().from(sites).where(eq(sites.id, input.siteId)).limit(1);
-      if (!site) throw new Error("Site not found");
+    .mutation(async ({ input, ctx }) => {
+      const site = await requireSite(ctx.user!, input.siteId);
 
       const targetPath = getSafePath(site.docRoot, input.filePath);
       
@@ -76,16 +79,15 @@ export const filesRouter = router({
       return { success: true };
     }),
 
-  delete: protectedProcedure
+  delete: fileProcedure
     .input(z.object({ siteId: z.string().uuid(), targetPath: z.string() }))
-    .mutation(async ({ input }) => {
-      const [site] = await db.select().from(sites).where(eq(sites.id, input.siteId)).limit(1);
-      if (!site) throw new Error("Site not found");
+    .mutation(async ({ input, ctx }) => {
+      const site = await requireSite(ctx.user!, input.siteId);
 
       const absPath = getSafePath(site.docRoot, input.targetPath);
       
       // Prevent deleting the root document root itself
-      if (absPath === site.docRoot || absPath === site.docRoot + "/") {
+      if (absPath === path.resolve(site.docRoot)) {
         throw new Error("Cannot delete document root");
       }
 

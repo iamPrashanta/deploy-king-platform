@@ -1,9 +1,9 @@
-import { router, protectedProcedure } from "../trpc";
+import { router, adminProcedure } from "../trpc";
 import { z } from "zod";
 import { backupQueue } from "../../queues";
 
 export const backupRouter = router({
-  pgsql: protectedProcedure
+  pgsql: adminProcedure
     .input(z.object({
       DB_HOST: z.string().default("localhost"),
       DB_USER: z.string(),
@@ -15,7 +15,7 @@ export const backupRouter = router({
       return { jobId: job.id };
     }),
 
-  seed: protectedProcedure
+  seed: adminProcedure
     .input(z.object({ engine: z.enum(["pgsql"]).default("pgsql") }))
     .mutation(async ({ input }) => {
       const job = await backupQueue.add("pgsql-seed", { engine: input.engine });

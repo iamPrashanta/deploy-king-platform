@@ -6,6 +6,7 @@ import { infraRouter } from "./routers/infra.router";
 import { sitesRouter } from "./routers/sites.router";
 import { databaseRouter } from "./routers/database.router";
 import { cronRouter } from "./routers/cron.router";
+import { workersRouter } from "./routers/workers.router";
 import { filesRouter } from "./routers/files.router";
 import { auditRouter, secretsRouter } from "./routers/audit.router";
 import { nodesRouter } from "./routers/nodes.router";
@@ -14,6 +15,9 @@ import { pipelineRouter } from "./routers/pipeline.router";
 import { gitRouter } from "./routers/git.router";
 import { systemRouter } from "./routers/system.router";
 import { automationsRouter } from "./routers/automations.router";
+import { mcpRouter } from "./routers/mcp.router";
+import { teamRouter } from "./routers/team.router";
+import { hostRouter } from "./routers/host.router";
 
 export const appRouter = router({
   auth: authRouter,
@@ -23,6 +27,7 @@ export const appRouter = router({
   sites: sitesRouter,
   database: databaseRouter,
   cron: cronRouter,
+  workers: workersRouter,
   files: filesRouter,
   audit: auditRouter,
   secrets: secretsRouter,
@@ -31,6 +36,9 @@ export const appRouter = router({
   git: gitRouter,
   system: systemRouter,
   automations: automationsRouter,
+  mcp: mcpRouter,
+  team: teamRouter,
+  host: hostRouter,
 });
 
 export type AppRouter = typeof appRouter;

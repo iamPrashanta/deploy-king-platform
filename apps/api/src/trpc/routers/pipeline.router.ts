@@ -1,4 +1,5 @@
-import { router, protectedProcedure, adminProcedure } from "../trpc";
+// Servers, host jobs and pipelines belong to the whole installation, not to one member: admins only.
+import { router, adminProcedure } from "../trpc";
 import { z } from "zod";
 import { db, jobs, pipelines, pipelineRuns } from "@dbbkp/db";
 import { eq, sql } from "drizzle-orm";
@@ -69,7 +70,7 @@ try {
 
 export const pipelineRouter = router({
   // ─── Dashboard ─────────────────────────────────────────────────────────────
-  dashboard: protectedProcedure.query(async () => {
+  dashboard: adminProcedure.query(async () => {
     try {
       const [pipelineList, runList] = await Promise.all([
         db.select().from(pipelines).orderBy(sql`created_at DESC`),
@@ -102,12 +103,12 @@ export const pipelineRouter = router({
   }),
 
   // ─── List Pipelines ────────────────────────────────────────────────────────
-  list: protectedProcedure.query(async () => {
+  list: adminProcedure.query(async () => {
     return db.select().from(pipelines).orderBy(sql`created_at DESC`);
   }),
 
   // ─── Get Single Pipeline ───────────────────────────────────────────────────
-  get: protectedProcedure
+  get: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const [p] = await db.select().from(pipelines).where(eq(pipelines.id, input.id)).limit(1);
@@ -185,7 +186,7 @@ export const pipelineRouter = router({
     }),
 
   // ─── Trigger Pipeline Run ──────────────────────────────────────────────────
-  run: protectedProcedure
+  run: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input }) => {
       const [p] = await db.select().from(pipelines).where(eq(pipelines.id, input.id)).limit(1);
@@ -196,7 +197,7 @@ export const pipelineRouter = router({
     }),
 
   // ─── List Runs ─────────────────────────────────────────────────────────────
-  runs: protectedProcedure
+  runs: adminProcedure
     .input(z.object({ pipelineId: z.string().uuid() }))
     .query(async ({ input }) => {
       return db.select().from(pipelineRuns)
@@ -206,7 +207,7 @@ export const pipelineRouter = router({
     }),
 
   // ─── Get Single Run ────────────────────────────────────────────────────────
-  runById: protectedProcedure
+  runById: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const [run] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, input.id)).limit(1);
@@ -216,7 +217,7 @@ export const pipelineRouter = router({
     }),
 
   // ─── Get Run Logs ──────────────────────────────────────────────────────────
-  log: protectedProcedure
+  log: adminProcedure
     .input(z.object({ runId: z.string().uuid() }))
     .query(async ({ input }) => {
       const [run] = await db.select({

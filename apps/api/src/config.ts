@@ -79,3 +79,11 @@ export const PUBLIC_HTTP_PORT = Number(process.env.DBBKP_PUBLIC_HTTP_PORT || 80)
 export const TLS_ENABLED = (process.env.DBBKP_TLS ?? "true") !== "false";
 /** Public URL of this API, used to show webhook URLs. */
 export const PUBLIC_API_URL = (process.env.PUBLIC_API_URL || "").replace(/\/+$/, "");
+
+/** The address people open an app at, e.g. https://my-app.example.com or http://my-app.localhost:8088. */
+export function publicAppUrl(domain: string) {
+  const proto = TLS_ENABLED ? "https" : "http";
+  const port = TLS_ENABLED ? 443 : PUBLIC_HTTP_PORT;
+  const plain = (proto === "https" && port === 443) || (proto === "http" && port === 80);
+  return `${proto}://${domain}${plain ? "" : `:${port}`}`;
+}

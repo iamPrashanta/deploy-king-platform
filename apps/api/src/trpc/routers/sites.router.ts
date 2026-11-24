@@ -12,6 +12,9 @@ import { logAudit } from "@dbbkp/audit";
 import { encrypt } from "@dbbkp/security";
 import { PERMISSIONS } from "../../utils/rbac";
 import { enqueueDeploy } from "../../services/deploy";
+import { DEFAULT_APP_MEMORY_MB, assertFits } from "../../services/capacity";
+import { visibleSite, visibleSites } from "../../services/team";
+import { normalizeRootDirectory } from "@dbbkp/buildplan";
 import {
   demuxLogs,
   isValidBranch,
@@ -29,10 +32,19 @@ const docker = new Docker();
 export const RUNTIMES = ["auto", "static", "node", "python", "php", "go", "docker", "image"] as const;
 
 const volumeInput = z.object({ name: z.string(), mountPath: z.string() });
-const envInput = z.object({ key: z.string(), value: z.string().max(32768) });
+// buildTime: also give the variable to the image build (NEXT_PUBLIC_*, VITE_* ...). Left out = keep what it was.
+const envInput = z.object({ key: z.string(), value: z.string().max(32768), buildTime: z.boolean().optional() });
 
 type Vol = { name: string; mountPath: string };
-type EnvPair = { key: string; value: string };
+type EnvPair = { key: string; value: string; buildTime?: boolean };
+
+function rootDir(input: string | null | undefined): string | null {
+  try {
+    return normalizeRootDirectory(input);
+  } catch (err: any) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+  }
+}
 
 function checkVolumes(input: Array<Partial<Vol>>): Vol[] {
   const volumes = input as Vol[];
@@ -58,8 +70,11 @@ async function upsertEnv(siteId: string, input: Array<Partial<EnvPair>>) {
     const enc = encrypt(v.value);
     await db
       .insert(siteEnvVars)
-      .values({ siteId, key: v.key, ...enc })
-      .onConflictDoUpdate({ target: [siteEnvVars.siteId, siteEnvVars.key], set: { ...enc, updatedAt: new Date() } });
+      .values({ siteId, key: v.key, ...enc, buildTime: !!v.buildTime })
+      .onConflictDoUpdate({
+        target: [siteEnvVars.siteId, siteEnvVars.key],
+        set: { ...enc, ...(v.buildTime !== undefined ? { buildTime: v.buildTime } : {}), updatedAt: new Date() },
+      });
   }
 }
 
@@ -67,11 +82,8 @@ async function upsertEnv(siteId: string, input: Array<Partial<EnvPair>>) {
 
 /** Loads a site only if the caller owns it (admins may load any). */
 async function ownedSite(ctx: Context, id: string) {
-  const where =
-    ctx.user?.role === "admin"
-      ? eq(sites.id, id)
-      : and(eq(sites.id, id), eq(sites.userId, ctx.user!.sub));
-  const [site] = await db.select().from(sites).where(where).limit(1);
+  // Admins see every app; a member sees their own plus the ones shared with them.
+  const site = await visibleSite(ctx.user!, id);
   if (!site) throw new TRPCError({ code: "NOT_FOUND", message: "Site not found or access denied" });
   return site;
 }
@@ -83,11 +95,8 @@ const siteIdInput = z.object({ id: z.string().uuid() });
 export const sitesRouter = router({
   // ─── List Sites ────────────────────────────────────────────────────────────
   list: protectedProcedure.query(async ({ ctx }) => {
-    // Admins see everything; everyone else sees only what they own.
-    if (ctx.user?.role === "admin") {
-      return db.select().from(sites).orderBy(desc(sites.createdAt));
-    }
-    return db.select().from(sites).where(eq(sites.userId, ctx.user!.sub)).orderBy(desc(sites.createdAt));
+    // Admins see everything; a member sees their own apps plus the ones shared with them.
+    return db.select().from(sites).where(await visibleSites(ctx.user!)).orderBy(desc(sites.createdAt));
   }),
 
   // ─── Create Site ───────────────────────────────────────────────────────────
@@ -110,9 +119,14 @@ export const sitesRouter = router({
         autoDeploy: z.boolean().default(true),
         memoryLimit: z.number().int().min(64).max(65536).optional(),
         cpuLimit: z.number().int().min(1).max(64).optional(),
+        // Build from a folder inside the repository (monorepos), e.g. "apps/web".
+        rootDirectory: z.string().max(255).optional(),
+        // "Deploy anyway" when the app does not fit. Honoured for the server owner in the panel only.
+        allowOverCapacity: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const rootDirectory = input.source === "git" ? rootDir(input.rootDirectory) : null;
       const domain = normalizeDomain(input.domain);
       if (!isValidDomain(domain)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Domain must be a valid hostname, e.g. app.example.com" });
@@ -133,6 +147,13 @@ export const sitesRouter = router({
 
       const [taken] = await db.select({ id: sites.id }).from(sites).where(eq(sites.domain, domain)).limit(1);
       if (taken) throw new TRPCError({ code: "CONFLICT", message: `Domain ${domain} is already in use` });
+
+      // Will it fit? Checked before anything is created, so a refused app leaves nothing behind.
+      const fit = await assertFits(
+        ctx,
+        { memoryMb: input.memoryLimit ?? DEFAULT_APP_MEMORY_MB, newApp: true, builds: true },
+        { override: input.allowOverCapacity }
+      );
 
       const siteId = crypto.randomUUID();
 
@@ -155,6 +176,7 @@ export const sitesRouter = router({
           ...(input.memoryLimit ? { memoryLimit: input.memoryLimit } : {}),
           ...(input.cpuLimit ? { cpuLimit: input.cpuLimit } : {}),
           branch: input.branch,
+          rootDirectory,
           buildCommand: input.buildCommand?.trim() || null,
           startCommand: input.startCommand?.trim() || null,
           // ZIP sites wait for their upload; git sites start deploying straight away.
@@ -191,6 +213,16 @@ export const sitesRouter = router({
         metadata: { runtime: input.runtime, source: input.source },
         ip: ctx.ip ?? undefined,
       });
+      if (fit.overridden) {
+        logAudit("capacity_override", {
+          actorId: ctx.user!.sub,
+          targetId: newSite.id,
+          targetType: "site",
+          targetName: domain,
+          metadata: { action: "create", memoryMb: fit.needMemoryMb, reasons: fit.reasons.map((r) => r.kind) },
+          ip: ctx.ip ?? undefined,
+        });
+      }
 
       return newSite;
     }),
@@ -214,10 +246,31 @@ export const sitesRouter = router({
         startCommand: z.string().max(1000).nullable().optional(),
         cpuLimit: z.number().int().min(1).max(64).optional(),
         memoryLimit: z.number().int().min(64).max(65536).optional(),
+        rootDirectory: z.string().max(255).nullable().optional(),
+        allowOverCapacity: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const site = await ownedSite(ctx, input.id);
+      // Raising the memory limit takes more of the server; lowering it never needs a check.
+      if (input.memoryLimit !== undefined && input.memoryLimit > (site.memoryLimit || DEFAULT_APP_MEMORY_MB)) {
+        const fit = await assertFits(
+          ctx,
+          { memoryMb: input.memoryLimit, newApp: false, builds: false },
+          { excludeSiteId: site.id, override: input.allowOverCapacity }
+        );
+        if (fit.overridden) {
+          logAudit("capacity_override", {
+            actorId: ctx.user!.sub,
+            targetId: site.id,
+            targetType: "site",
+            targetName: site.domain,
+            metadata: { action: "raise-limit", memoryMb: input.memoryLimit, reasons: fit.reasons.map((r) => r.kind) },
+            ip: ctx.ip ?? undefined,
+          });
+        }
+      }
+      const rootDirectory = input.rootDirectory !== undefined ? rootDir(input.rootDirectory) : undefined;
       if (input.branch !== undefined && !isValidBranch(input.branch)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid branch name" });
       }
@@ -246,6 +299,7 @@ export const sitesRouter = router({
           ...(input.startCommand !== undefined ? { startCommand: input.startCommand?.trim() || null } : {}),
           ...(input.cpuLimit !== undefined ? { cpuLimit: input.cpuLimit } : {}),
           ...(input.memoryLimit !== undefined ? { memoryLimit: input.memoryLimit } : {}),
+          ...(rootDirectory !== undefined ? { rootDirectory } : {}),
           updatedAt: new Date(),
         })
         .where(eq(sites.id, site.id))
@@ -319,6 +373,8 @@ export const sitesRouter = router({
     .input(z.object({ id: z.string().uuid(), restartOnly: z.boolean().optional() }))
     .mutation(async ({ input, ctx }) => {
       const site = await ownedSite(ctx, input.id);
+      // The app already holds its memory. A rebuild still needs disk, and nobody may build on a full one.
+      if (!input.restartOnly) await assertFits(ctx, { memoryMb: 0, newApp: false, builds: true });
       const deployment = await enqueueDeploy(site.id, { trigger: "manual", createdBy: ctx.user!.sub, reuseImage: !!input.restartOnly });
       logAudit("deploy", {
         actorId: ctx.user!.sub,
@@ -371,7 +427,7 @@ export const sitesRouter = router({
 
   // ─── Answer a question a running deploy is waiting on ──────────────────────
   answer: permissionProcedure(PERMISSIONS.SITE_DEPLOY)
-    .input(z.object({ deploymentId: z.string().uuid(), promptId: z.string().max(100), value: z.string().max(100) }))
+    .input(z.object({ deploymentId: z.string().uuid(), promptId: z.string().max(100), value: z.string().max(100), allowOverCapacity: z.boolean().optional() }))
     .mutation(async ({ input, ctx }) => {
       const [deployment] = await db.select().from(deployments).where(eq(deployments.id, input.deploymentId)).limit(1);
       if (!deployment) throw new TRPCError({ code: "NOT_FOUND" });
@@ -382,6 +438,24 @@ export const sitesRouter = router({
       }
       if (prompt.options && !prompt.options.some((o) => o.value === input.value)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Not one of the offered answers" });
+      }
+      // "Start again with more memory" takes more of the server, so it passes the same check as raising the limit by hand.
+      const moreMb = prompt.id === "memory" ? Number(input.value) : NaN;
+      if (Number.isFinite(moreMb)) {
+        const site = await ownedSite(ctx, deployment.siteId);
+        if (moreMb > (site.memoryLimit || DEFAULT_APP_MEMORY_MB)) {
+          const fit = await assertFits(ctx, { memoryMb: moreMb, newApp: false, builds: false }, { excludeSiteId: site.id, override: input.allowOverCapacity });
+          if (fit.overridden) {
+            logAudit("capacity_override", {
+              actorId: ctx.user!.sub,
+              targetId: site.id,
+              targetType: "site",
+              targetName: site.domain,
+              metadata: { action: "more-memory-mid-deploy", memoryMb: moreMb, reasons: fit.reasons.map((r) => r.kind) },
+              ip: ctx.ip ?? undefined,
+            });
+          }
+        }
       }
       await db
         .update(deployments)
@@ -432,14 +506,14 @@ export const sitesRouter = router({
   envList: protectedProcedure.input(siteIdInput).query(async ({ input, ctx }) => {
     const site = await ownedSite(ctx, input.id);
     return db
-      .select({ key: siteEnvVars.key, updatedAt: siteEnvVars.updatedAt })
+      .select({ key: siteEnvVars.key, buildTime: siteEnvVars.buildTime, updatedAt: siteEnvVars.updatedAt })
       .from(siteEnvVars)
       .where(eq(siteEnvVars.siteId, site.id))
       .orderBy(siteEnvVars.key);
   }),
 
   envSet: permissionProcedure(PERMISSIONS.SITE_DEPLOY)
-    .input(z.object({ id: z.string().uuid(), key: z.string(), value: z.string().max(32768) }))
+    .input(z.object({ id: z.string().uuid(), key: z.string(), value: z.string().max(32768), buildTime: z.boolean().optional() }))
     .mutation(async ({ input, ctx }) => {
       const site = await ownedSite(ctx, input.id);
       if (!isValidEnvKey(input.key)) {
@@ -448,10 +522,10 @@ export const sitesRouter = router({
       const enc = encrypt(input.value);
       await db
         .insert(siteEnvVars)
-        .values({ siteId: site.id, key: input.key, ...enc })
+        .values({ siteId: site.id, key: input.key, ...enc, buildTime: !!input.buildTime })
         .onConflictDoUpdate({
           target: [siteEnvVars.siteId, siteEnvVars.key],
-          set: { ...enc, updatedAt: new Date() },
+          set: { ...enc, ...(input.buildTime !== undefined ? { buildTime: input.buildTime } : {}), updatedAt: new Date() },
         });
       logAudit("secret_set", {
         actorId: ctx.user!.sub,
@@ -462,6 +536,20 @@ export const sitesRouter = router({
         ip: ctx.ip ?? undefined,
       });
       // Takes effect on the next deploy.
+      return { success: true };
+    }),
+
+  // Values are write-only, so switching "available during build" must not need the value again.
+  envSetBuildTime: permissionProcedure(PERMISSIONS.SITE_DEPLOY)
+    .input(z.object({ id: z.string().uuid(), key: z.string(), buildTime: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      const site = await ownedSite(ctx, input.id);
+      const rows = await db
+        .update(siteEnvVars)
+        .set({ buildTime: input.buildTime, updatedAt: new Date() })
+        .where(and(eq(siteEnvVars.siteId, site.id), eq(siteEnvVars.key, input.key)))
+        .returning({ key: siteEnvVars.key });
+      if (!rows.length) throw new TRPCError({ code: "NOT_FOUND", message: "Variable not found" });
       return { success: true };
     }),
 

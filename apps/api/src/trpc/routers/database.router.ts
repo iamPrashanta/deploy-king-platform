@@ -1,16 +1,24 @@
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc";
-import { db, dbInstances } from "@dbbkp/db";
-import { eq, sql } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
+import { router, protectedProcedure, permissionProcedure } from "../trpc";
+import { db, dbInstances, sites } from "@dbbkp/db";
+import { eq, inArray, sql } from "drizzle-orm";
+import { PERMISSIONS } from "../../utils/rbac";
+import { requireSite, visibleSites } from "../../services/team";
 import { databaseQueue } from "../../queues";
 import crypto from "node:crypto";
 
 export const databaseRouter = router({
-  list: protectedProcedure.query(async () => {
-    return db.select().from(dbInstances).orderBy(sql`created_at DESC`);
+  // Admins see every database; everyone else only those attached to an app they may see.
+  list: protectedProcedure.query(async ({ ctx }) => {
+    const limit = await visibleSites(ctx.user!);
+    if (!limit) return db.select().from(dbInstances).orderBy(sql`created_at DESC`);
+    const ids = (await db.select({ id: sites.id }).from(sites).where(limit)).map((s) => s.id);
+    if (!ids.length) return [];
+    return db.select().from(dbInstances).where(inArray(dbInstances.siteId, ids)).orderBy(sql`created_at DESC`);
   }),
 
-  create: protectedProcedure
+  create: permissionProcedure(PERMISSIONS.DATABASE_CREATE)
     .input(
       z.object({
         name: z.string().min(3).max(30).regex(/^[a-z0-9_]+$/),
@@ -19,7 +27,10 @@ export const databaseRouter = router({
         siteId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      // A database for an app needs that app; one that belongs to no app is the admin's to create.
+      if (input.siteId) await requireSite(ctx.user!, input.siteId);
+      else if (ctx.user!.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Choose the app this database is for." });
       const dbPass = crypto.randomBytes(12).toString("hex");
 
       // Check if name already taken
@@ -60,9 +71,16 @@ export const databaseRouter = router({
       };
     }),
 
-  delete: protectedProcedure
+  delete: permissionProcedure(PERMISSIONS.DATABASE_CREATE)
     .input(z.object({ id: z.string().uuid() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const [row] = await db.select().from(dbInstances).where(eq(dbInstances.id, input.id)).limit(1);
+      const notFound = new TRPCError({ code: "NOT_FOUND", message: "Database not found" });
+      if (!row) throw notFound;
+      if (ctx.user!.role !== "admin") {
+        if (!row.siteId) throw notFound;
+        await requireSite(ctx.user!, row.siteId).catch(() => { throw notFound; });
+      }
       // NOTE: For safety in this early version, we only delete the DB record.
       // We don't automatically drop production databases from PostgreSQL to prevent data loss.
       // The user must drop them manually or we can add a specific `forceDrop` flag later.

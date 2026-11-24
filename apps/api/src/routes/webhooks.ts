@@ -4,6 +4,7 @@ import { db, sites, pipelines } from "@dbbkp/db";
 import { eq } from "drizzle-orm";
 import { hostingQueue } from "../queues";
 import { enqueueDeploy } from "../services/deploy";
+import { DEFAULT_APP_MEMORY_MB, capacity, evaluateFit } from "../services/capacity";
 import { enqueuePipelineRun } from "../services/pipelines";
 import { normalizeRepoUrl, isValidBranch, siteDocRoot } from "../services/validation";
 
@@ -115,6 +116,13 @@ router.post("/github", async (req, res) => {
           const expiresAt = new Date(Date.now() + PREVIEW_TTL_MS);
 
           if (!existingPreview) {
+            // A preview is a whole extra app. When the server has no room for it, skip it and leave the real apps alone.
+            const fit = evaluateFit(await capacity(), { memoryMb: DEFAULT_APP_MEMORY_MB, newApp: true, builds: true });
+            if (fit.verdict === "blocked") {
+              console.log(`[Webhook] Preview ${previewDomain} skipped, it does not fit: ${fit.reasons.map((r) => r.kind).join(", ")}`);
+              res.json({ ok: true, triggered, skipped: "The preview does not fit on the server." });
+              return;
+            }
             const id = crypto.randomUUID();
             await db.insert(sites).values({
               id,

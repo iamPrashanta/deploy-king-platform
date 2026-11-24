@@ -20,10 +20,15 @@ import backupRouterLegacy from "./routes/backup";
 import infraRouterLegacy from "./routes/infra";
 import webhooksRouter from "./routes/webhooks";
 import hooksRouter from "./routes/hooks";
+import mcpRouter from "./routes/mcp";
+import { llmsTxt } from "./routes/llms";
 import { syncAllSchedules } from "./services/automations";
 import securityRouter from "./routes/security";
 import nodesRouter, { sweepOfflineNodes, pruneOldMetrics } from "./routes/nodes";
 import { startExpirationReaper } from "./services/reaper";
+import { startAutomaticCleanup } from "./services/cleanup";
+import { startHostWatch } from "./services/hostwatch";
+import { syncSchedules } from "./services/cronjobs";
 import { startReconciliationLoop } from "./services/reconciler";
 
 const app = express();
@@ -47,6 +52,8 @@ app.use("/api/auth", authRouter);
 app.use("/api/sites", requireAuth, sitesRouter);
 app.use("/webhooks", webhooksRouter);
 app.use("/hooks", hooksRouter);
+app.use("/mcp", mcpRouter); // AI agents (Model Context Protocol)
+app.get("/llms.txt", llmsTxt); // how agents use this server
 app.use("/internal/security", securityRouter);
 app.use("/internal/nodes", nodesRouter);
 
@@ -142,6 +149,9 @@ async function startServer() {
 
     // Expiration reaper: cleanup temporary sites/previews every 10m
     startExpirationReaper();
+    startAutomaticCleanup();
+    startHostWatch();
+    syncSchedules().then((r) => console.log(`[Cron] ${r.jobs} scheduled jobs, ${r.added} schedules restored`)).catch((e) => console.error("[Cron] could not sync schedules:", e?.message ?? e));
 
     // Reconciliation loop: fix drift/crashed containers every 15m
     startReconciliationLoop();

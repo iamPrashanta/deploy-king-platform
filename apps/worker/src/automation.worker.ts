@@ -42,8 +42,55 @@ function render(value: unknown, ctx: Ctx): string {
 }
 
 // ─── Guards ──────────────────────────────────────────────────────────────────
-/** Blocks requests to link-local and cloud metadata addresses (169.254.0.0/16, fe80::/10). */
-async function assertSafeUrl(raw: string, httpsOnly = false) {
+/**
+ * Where a workflow may send requests.
+ *  - Nobody: link-local and cloud metadata addresses (169.254.0.0/16, fe80::/10, ...), which hand out server credentials.
+ *  - Non-admin owners: also loopback and private ranges, so a user's workflow cannot reach the platform's
+ *    own database, Redis, API or other people's containers. Admins run the server and may call internal services.
+ * WORKFLOW_ALLOW_PRIVATE=true lifts the second rule (single-user and local development setups).
+ */
+const ALLOW_PRIVATE_FOR_ALL = process.env.WORKFLOW_ALLOW_PRIVATE === "true";
+
+function v4Parts(a: string): number[] | null {
+  const m = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/i.exec(a);
+  return m ? m.slice(1).map(Number) : null;
+}
+export function addressKind(addr: string): "metadata" | "private" | "public" {
+  const a = addr.toLowerCase();
+  const p = v4Parts(a);
+  if (p) {
+    if (p[0] === 169 && p[1] === 254) return "metadata";
+    if (a.endsWith("100.100.100.200")) return "metadata";
+    if (p[0] === 0 || p[0] === 127 || p[0] === 10) return "private";
+    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return "private";
+    if (p[0] === 192 && p[1] === 168) return "private";
+    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return "private"; // carrier-grade NAT
+    if (p[0] >= 224) return "private"; // multicast and reserved
+    return "public";
+  }
+  if (/^fe[89ab]/.test(a) || a === "fd00:ec2::254") return "metadata";
+  if (a === "::1" || a === "::" || /^f[cd]/.test(a)) return "private";
+  // IPv6 forms that carry an IPv4 address (::ffff:7f00:1, ::7f00:1, 64:ff9b::7f00:1) are judged by that address.
+  const g = v6Groups(a);
+  if (g) {
+    const zeros = g.slice(0, 5).every((x) => x === 0);
+    const nat64 = g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0);
+    if ((zeros && (g[5] === 0xffff || g[5] === 0)) || nat64) {
+      return addressKind(`${g[6] >> 8}.${g[6] & 255}.${g[7] >> 8}.${g[7] & 255}`);
+    }
+  }
+  return "public";
+}
+function v6Groups(a: string): number[] | null {
+  if (!net.isIPv6(a) || a.includes(".")) return null;
+  const [head, tail] = a.split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail !== undefined ? (tail ? tail.split(":") : []) : null;
+  const parts = t === null ? h : [...h, ...Array(8 - h.length - t.length).fill("0"), ...t];
+  return parts.length === 8 ? parts.map((x) => parseInt(x || "0", 16)) : null;
+}
+
+async function assertSafeUrl(raw: string, opts: { httpsOnly?: boolean; allowPrivate: boolean }) {
   let u: URL;
   try {
     u = new URL(raw);
@@ -51,15 +98,37 @@ async function assertSafeUrl(raw: string, httpsOnly = false) {
     throw new Error(`Not a valid URL: ${raw.slice(0, 120)}`);
   }
   if (!["http:", "https:"].includes(u.protocol)) throw new Error("Only http and https URLs are allowed");
-  if (httpsOnly && u.protocol !== "https:") throw new Error("Use an https URL");
+  if (opts.httpsOnly && u.protocol !== "https:") throw new Error("Use an https URL");
   const host = u.hostname.replace(/^\[|\]$/g, "");
   const addrs = net.isIP(host) ? [host] : (await dns.lookup(host, { all: true }).catch(() => [])).map((a) => a.address);
   for (const a of addrs) {
-    if (/^169\.254\./.test(a) || /^fe80:/i.test(a) || a === "100.100.100.200" || a === "fd00:ec2::254") {
-      throw new Error("Requests to link-local or cloud metadata addresses are blocked");
+    const kind = addressKind(a);
+    if (kind === "metadata") throw new Error("Requests to link-local or cloud metadata addresses are blocked");
+    if (kind === "private" && !opts.allowPrivate && !ALLOW_PRIVATE_FOR_ALL) {
+      throw new Error(`${host} is a private or internal address. Only an administrator's workflows can call those.`);
     }
   }
   return u;
+}
+
+/** fetch() that checks every redirect hop too, so a public URL cannot bounce a request to an internal one. */
+async function safeFetch(url: string, init: RequestInit, opts: { httpsOnly?: boolean; allowPrivate: boolean }): Promise<Response> {
+  let current = url;
+  let method = init.method ?? "GET";
+  let body = init.body;
+  for (let hop = 0; hop <= 5; hop++) {
+    await assertSafeUrl(current, opts);
+    const res = await fetch(current, { ...init, method, body, redirect: "manual" });
+    if (![301, 302, 303, 307, 308].includes(res.status)) return res;
+    const next = res.headers.get("location");
+    if (!next) return res;
+    current = new URL(next, current).toString();
+    if (res.status === 303 || ((res.status === 301 || res.status === 302) && method !== "GET" && method !== "HEAD")) {
+      method = "GET";
+      body = undefined;
+    }
+  }
+  throw new Error("Too many redirects");
 }
 
 async function isAdminUser(id: string) {
@@ -148,10 +217,11 @@ const EXECUTORS: Record<string, Exec> = {
     return { output };
   },
 
-  "action.http": async (node, ctx) => {
+  "action.http": async (node, ctx, env) => {
     const url = render(node.data?.url, ctx).trim();
     if (!url) throw new Error("Set a URL for this step");
-    await assertSafeUrl(url);
+    const guard = { allowPrivate: env.isAdmin };
+    await assertSafeUrl(url, guard);
     const method = String(node.data?.method || "GET").toUpperCase();
     const headers: Record<string, string> = {};
     for (const line of render(node.data?.headers, ctx).split("\n")) {
@@ -167,8 +237,9 @@ const EXECUTORS: Record<string, Exec> = {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res: Response;
     try {
-      res = await fetch(url, { method, headers, body, signal: controller.signal, redirect: "follow" });
+      res = await safeFetch(url, { method, headers, body, signal: controller.signal }, guard);
     } catch (err: any) {
+      if (/private or internal address|metadata addresses|Too many redirects|Only http/.test(err?.message ?? "")) throw err;
       throw new Error(err?.name === "AbortError" ? `No answer from ${url} within ${timeoutMs / 1000}s` : `Could not reach ${url}: ${err?.cause?.code || err.message}`);
     } finally {
       clearTimeout(timer);
@@ -208,14 +279,15 @@ const EXECUTORS: Record<string, Exec> = {
     return { output: { waitedSeconds: seconds } };
   },
 
-  "notify.message": async (node, ctx) => {
+  "notify.message": async (node, ctx, env) => {
     const url = render(node.data?.url, ctx).trim();
     if (!url) throw new Error("Add the webhook URL for this message");
-    await assertSafeUrl(url, true);
+    const guard = { httpsOnly: true, allowPrivate: env.isAdmin };
+    await assertSafeUrl(url, guard);
     const message = render(node.data?.message, ctx).slice(0, 1900);
     const kind = String(node.data?.kind || "discord");
     const payload = kind === "slack" ? { text: message } : kind === "discord" ? { content: message } : { text: message, content: message, message };
-    const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+    const res = await safeFetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }, guard);
     const output = { status: res.status, ok: res.ok, sent: message };
     if (!res.ok) throw Object.assign(new Error(`The ${kind} webhook answered ${res.status}`), { output });
     return { output };

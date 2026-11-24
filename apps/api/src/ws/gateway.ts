@@ -22,6 +22,7 @@
  *   { channel: "containers",id, payload: { line, ts } }
  */
 
+import { visibleSite } from "../services/team";
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server as HttpServer } from "http";
 import type { IncomingMessage } from "http";
@@ -105,14 +106,8 @@ async function validateContainerOwnership(containerRef: string, user: AuthedUser
   }
 
   if (!siteId) return null;
-  if (user.role === "admin") return siteId;
-
-  const [site] = await db
-    .select({ id: sites.id })
-    .from(sites)
-    .where(and(eq(sites.id, siteId), eq(sites.userId, user.sub)))
-    .limit(1);
-
+  // Same rule as the API: admins see every app, a member sees their own plus the ones shared with them.
+  const site = await visibleSite(user, siteId);
   return site ? site.id : null;
 }
 

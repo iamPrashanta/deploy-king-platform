@@ -1,7 +1,8 @@
+import os from "node:os";
 import "./env";
 import { Worker, type Job } from "bullmq";
 import { connection } from "./connection";
-import { db, sites, deployments, containerInstances, siteEnvVars, gitProviders, type Site, type Deployment, type SiteVolume, type DeployPrompt } from "@dbbkp/db";
+import { db, sites, deployments, containerInstances, siteEnvVars, gitProviders, type Site, type Deployment, type SiteVolume, type DeployPrompt, siteWorkers, type SiteWorker } from "@dbbkp/db";
 import { and, desc, eq, isNotNull, ne } from "drizzle-orm";
 import Docker from "dockerode";
 import execa from "execa";
@@ -10,7 +11,7 @@ import path from "path";
 import crypto from "node:crypto";
 import * as tar from "tar";
 import { decrypt } from "@dbbkp/security";
-import { createBuildPlan, GENERATED_DOCKERFILE, gitAuthArgs, redactToken, NODE_VERSIONS, type BuildPlan } from "./deploy/detect";
+import { createBuildPlan, GENERATED_DOCKERFILE, gitAuthArgs, redactToken, resolveBuildRoot, withBuildArgs, NODE_VERSIONS, type BuildPlan } from "./deploy/detect";
 import { PassThrough } from "node:stream";
 import { fireDeployEvent } from "./automation.worker";
 import net from "node:net";
@@ -154,6 +155,8 @@ async function siteContainers(siteId: string) {
   return docker.listContainers({ all: true, filters: { label: [`dbbkp.site=${siteId}`] } });
 }
 
+const isWorker = (c: Docker.ContainerInfo) => c.Labels?.["dbbkp.role"] === "worker";
+
 async function removeContainer(id: string) {
   const c = docker.getContainer(id);
   await c.stop({ t: 10 }).catch(() => {});
@@ -256,9 +259,14 @@ async function prepareSource(site: Site, docRoot: string, log: DeployLog) {
 
 // ─── Build ───────────────────────────────────────────────────────────────────
 
-async function buildImage(docRoot: string, plan: BuildPlan, imageTag: string, log: DeployLog) {
+async function buildImage(docRoot: string, plan: BuildPlan, imageTag: string, log: DeployLog, buildVars: Record<string, string> = {}) {
+  const buildKeys = Object.keys(buildVars);
   if (plan.dockerfile !== null) {
-    await fs.writeFile(path.join(docRoot, plan.dockerfilePath), plan.dockerfile);
+    await fs.writeFile(path.join(docRoot, plan.dockerfilePath), withBuildArgs(plan.dockerfile, buildKeys));
+  }
+  if (buildKeys.length) {
+    log.line(`Build-time variables: ${buildKeys.join(", ")}`);
+    if (plan.dockerfile === null) log.line("Your Dockerfile receives them as build arguments; it needs an ARG line for each one it uses.");
   }
 
   // Generated builds never need VCS metadata or a checked-in node_modules; a
@@ -282,6 +290,7 @@ async function buildImage(docRoot: string, plan: BuildPlan, imageTag: string, lo
     dockerfile: plan.dockerfilePath,
     rm: true,
     forcerm: true,
+    ...(buildKeys.length ? { buildargs: buildVars } : {}),
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -344,6 +353,14 @@ function traefikLabels(site: Site, deploymentId: string, port: number): Record<s
     labels[`traefik.http.routers.${r}.entrypoints`] = ENTRYPOINT_WEB;
   }
   return labels;
+}
+
+/** Variables marked "available during build", decrypted, for the image build. */
+async function siteBuildVars(site: Site): Promise<Record<string, string>> {
+  const rows = await db.select().from(siteEnvVars).where(and(eq(siteEnvVars.siteId, site.id), eq(siteEnvVars.buildTime, true)));
+  const out: Record<string, string> = {};
+  for (const row of rows) out[row.key] = decrypt({ encryptedValue: row.encryptedValue, iv: row.iv, authTag: row.authTag });
+  return out;
 }
 
 async function siteEnvironment(site: Site, port: number): Promise<string[]> {
@@ -618,6 +635,18 @@ async function pruneImages(site: Site, keepTag: string) {
 
 // ─── Deploy ──────────────────────────────────────────────────────────────────
 
+/** A full disk breaks the database and every running app, so builds stop at 95%. The API applies the same limit. */
+async function assertDiskHasRoom() {
+  let usedPct = 0;
+  try {
+    const st = await (fs as any).statfs(SITES_ROOT);
+    if (st.blocks > 0) usedPct = Math.round(((st.blocks - st.bavail) / st.blocks) * 100);
+  } catch {
+    return; // cannot measure: do not block the deploy on that
+  }
+  if (usedPct >= 95) throw new Error(`The disk is ${usedPct}% full. Free space on the server, then deploy again.`);
+}
+
 async function deploySite(job: Job<DeployJobData>) {
   const { siteId, rollbackToDeploymentId, reuseImage } = job.data;
   const [site] = await db.select().from(sites).where(eq(sites.id, siteId)).limit(1);
@@ -677,6 +706,9 @@ async function deploySite(job: Job<DeployJobData>) {
       if (reused) log.line(`Restarting from the current image ${site.currentTag} - no rebuild`);
     }
 
+    // Whatever started this deploy (panel, push, agent): nothing is pulled or built onto a full disk.
+    if (!reused?.imageTag) await assertDiskHasRoom();
+
     if (reused?.imageTag) {
       imageTag = reused.imageTag;
       runtime = reused.runtime;
@@ -713,8 +745,13 @@ async function deploySite(job: Job<DeployJobData>) {
       commitSha = source.commitSha ?? commitSha;
       commitMessage = source.commitMessage ?? commitMessage;
 
+      // Monorepos: build the app's own folder, not the whole repository.
+      const buildRoot = resolveBuildRoot(docRoot, site.rootDirectory);
+      if (buildRoot !== docRoot) log.line(`Building from the folder ${site.rootDirectory}`);
+      const buildVars = await siteBuildVars(site);
+
       let settings: Site = { ...site };
-      let plan = createBuildPlan(docRoot, settings);
+      let plan = createBuildPlan(buildRoot, settings);
       for (const note of plan.notes) log.line(note);
 
       runtime = plan.runtime;
@@ -741,7 +778,7 @@ async function deploySite(job: Job<DeployJobData>) {
 
       for (let attempt = 0; ; attempt++) {
         try {
-          await buildImage(docRoot, plan, imageTag, log);
+          await buildImage(buildRoot, plan, imageTag, log, buildVars);
           break;
         } catch (err: any) {
           const nodeBuild = plan.runtime === "node" || plan.runtime === "node-static";
@@ -763,11 +800,11 @@ async function deploySite(job: Job<DeployJobData>) {
           if (!answer || answer === "stop" || !NODE_VERSIONS.includes(answer)) throw err;
           settings = { ...settings, nodeVersion: answer };
           chosenNodeVersion = answer;
-          plan = createBuildPlan(docRoot, settings);
+          plan = createBuildPlan(buildRoot, settings);
           log.line(`Rebuilding with Node.js ${answer}`);
           for (const note of plan.notes) log.line(note);
         } finally {
-          if (plan.dockerfile !== null) await fs.remove(path.join(docRoot, GENERATED_DOCKERFILE)).catch(() => {});
+          if (plan.dockerfile !== null) await fs.remove(path.join(buildRoot, GENERATED_DOCKERFILE)).catch(() => {});
         }
       }
     }
@@ -789,7 +826,7 @@ async function deploySite(job: Job<DeployJobData>) {
         name: containerName,
         Image: imageTag,
         Env: await siteEnvironment(site, p),
-        Labels: traefikLabels(site, deployment.id, p),
+        Labels: { ...traefikLabels(site, deployment.id, p), "dbbkp.role": "web" },
         HostConfig: {
           NetworkMode: NETWORK,
           Binds: await ensureVolumes(site, log),
@@ -802,6 +839,10 @@ async function deploySite(job: Job<DeployJobData>) {
           PidsLimit: site.pidsLimit || 256,
           ReadonlyRootfs: site.isReadOnly || false,
           SecurityOpt: ["no-new-privileges"],
+          // If the server does run out of memory, the system stops an app first, never the platform's own containers.
+          OomScoreAdj: 500,
+          // Keep at most 3 x 10 MB of output per app, so logs cannot fill the disk.
+          LogConfig: { Type: "json-file", Config: { "max-size": "10m", "max-file": "3" } },
         },
       });
       await c.start();
@@ -844,7 +885,8 @@ async function deploySite(job: Job<DeployJobData>) {
         if (err instanceof AppExited && err.outOfMemory && !asked.has("memory")) {
           asked.add("memory");
           log.line(err.message.split("\n")[0]);
-          const choices = [1024, 2048, 4096, 8192].filter((m) => m > memoryMb);
+          // Never offer more than the machine has; the API then checks the chosen size against the capacity ledger.
+          const choices = [1024, 2048, 4096, 8192].filter((m) => m > memoryMb && m <= os.totalmem() / (1024 * 1024));
           if (!choices.length) throw err;
           const label = (m: number) => (m >= 1024 ? `${m / 1024} GB` : `${m} MB`);
           const answer = await ask(deployment.id, log, {
@@ -876,7 +918,7 @@ async function deploySite(job: Job<DeployJobData>) {
     // ── 4. Switch over ───────────────────────────────────────────────────────
     const info = await newContainer.inspect();
     for (const c of await siteContainers(site.id)) {
-      if (c.Id !== info.Id) {
+      if (c.Id !== info.Id && !isWorker(c)) {
         log.line(`Retiring previous container ${c.Names?.[0]?.replace(/^\//, "") ?? c.Id.slice(0, 12)}`);
         await removeContainer(c.Id);
       }
@@ -916,12 +958,19 @@ async function deploySite(job: Job<DeployJobData>) {
         ...(chosenMemory ? { memoryLimit: chosenMemory } : {}),
         sslEnabled: TLS_ENABLED,
         nginxConfig: "traefik: docker labels",
+        // a new container starts with a clean record
+        health: "ok",
+        healthDetail: null,
+        healthChangedAt: finishedAt,
+        restartsSeen: 0,
         lastReconciledAt: finishedAt,
         updatedAt: finishedAt,
       })
       .where(eq(sites.id, site.id));
 
     log.line(`Deployment live: ${publicUrl(site.domain)}`);
+    // Workers follow the release that just went live. A worker that fails to start does not undo the deploy.
+    await syncWorkers({ ...site, currentTag: imageTag, port }, log).catch((err) => log.line(`Workers: ${err.message}`));
     fireDeployEvent(site, { id: deployment.id, trigger: deployment.trigger, status: "active" }).catch((err) => console.error("[Workflows] deploy event:", err.message));
     await pruneImages(site, imageTag).catch((err) => console.error("[Hosting] Image prune failed:", err));
 
@@ -940,7 +989,7 @@ async function deploySite(job: Job<DeployJobData>) {
 
     // If the previous release is still running, the site is still up: say so
     // instead of flipping a healthy site to "failed".
-    const stillServing = (await siteContainers(site.id).catch(() => [])).some((c) => c.State === "running");
+    const stillServing = (await siteContainers(site.id).catch(() => [])).some((c) => c.State === "running" && !isWorker(c));
     await db
       .update(sites)
       .set({ status: stillServing ? "active" : "failed", updatedAt: finishedAt })
@@ -952,6 +1001,92 @@ async function deploySite(job: Job<DeployJobData>) {
   } finally {
     await log.close();
   }
+}
+
+// ─── Workers ──────────────────────────────────────────────────
+// Background processes of an app: the live release's image with its own command, the app's variables
+// and volumes, no web traffic. Each copy is one container labelled dbbkp.role=worker.
+
+/** What a worker container was made from. A container whose spec differs is replaced. */
+function workerSpec(w: SiteWorker, image: string, envHash: string) {
+  return crypto.createHash("sha256").update(JSON.stringify([image, w.command, w.memoryLimit, w.restart, envHash])).digest("hex").slice(0, 16);
+}
+
+const quietLog = { line: (_: string) => {} } as unknown as DeployLog;
+
+/**
+ * Makes the app's worker containers match its workers: starts what is missing, replaces what is out of date
+ * (new release, new command, new memory limit, changed variables), stops what was removed or switched off.
+ */
+async function syncWorkers(site: Site, log: DeployLog = quietLog) {
+  const defs = await db.select().from(siteWorkers).where(eq(siteWorkers.siteId, site.id));
+  const running = (await siteContainers(site.id)).filter(isWorker);
+  if (!site.currentTag || !(await imageExists(site.currentTag))) {
+    if (defs.some((d) => d.enabled)) log.line("Workers start after the first successful deploy.");
+    return { started: 0, stopped: 0 };
+  }
+  const env = await siteEnvironment(site, site.port ?? 3000);
+  const envHash = crypto.createHash("sha256").update(env.join("\n")).digest("hex");
+  const want = new Map<string, { def: SiteWorker; copy: number; spec: string }>();
+  for (const d of defs) {
+    if (!d.enabled) continue;
+    for (let i = 0; i < Math.max(1, Math.min(d.copies, 8)); i++) want.set(`${d.name}#${i}`, { def: d, copy: i, spec: workerSpec(d, site.currentTag, envHash) });
+  }
+  let stopped = 0;
+  const keep = new Set<string>();
+  for (const c of running) {
+    const slot = `${c.Labels?.["dbbkp.worker"]}#${c.Labels?.["dbbkp.copy"]}`;
+    const w = want.get(slot);
+    if (w && c.Labels?.["dbbkp.spec"] === w.spec && !keep.has(slot)) {
+      keep.add(slot);
+      continue;
+    }
+    const graceful = defs.find((d) => d.name === c.Labels?.["dbbkp.worker"])?.gracefulStop ?? true;
+    const ct = docker.getContainer(c.Id);
+    await ct.stop({ t: graceful ? 30 : 5 }).catch(() => {});
+    await ct.remove({ force: true }).catch(() => {});
+    stopped++;
+  }
+  let started = 0;
+  const binds = want.size ? await ensureVolumes(site, quietLog) : [];
+  for (const [slot, w] of want) {
+    if (keep.has(slot)) continue;
+    const name = `${repoName(site)}-w-${w.def.name}-${w.copy}-${crypto.randomBytes(2).toString("hex")}`;
+    try {
+      const c = await docker.createContainer({
+        name,
+        Image: site.currentTag,
+        Cmd: ["sh", "-c", w.def.command],
+        Env: env,
+        Labels: { "dbbkp.site": site.id, "dbbkp.role": "worker", "dbbkp.worker": w.def.name, "dbbkp.copy": String(w.copy), "dbbkp.spec": w.spec, "dbbkp.managed": "true" },
+        HostConfig: {
+          NetworkMode: NETWORK,
+          Binds: binds,
+          RestartPolicy: w.def.restart ? { Name: "unless-stopped" } : { Name: "no" },
+          Memory: w.def.memoryLimit * 1024 * 1024,
+          CpuPeriod: 100000,
+          CpuQuota: (site.cpuLimit || 1) * 100000,
+          PidsLimit: site.pidsLimit || 256,
+          ReadonlyRootfs: site.isReadOnly || false,
+          SecurityOpt: ["no-new-privileges"],
+          OomScoreAdj: 500,
+          LogConfig: { Type: "json-file", Config: { "max-size": "10m", "max-file": "3" } },
+        },
+      });
+      await c.start();
+      started++;
+      log.line(`Started worker ${w.def.name}${w.def.copies > 1 ? ` #${w.copy + 1}` : ""} (${w.def.memoryLimit} MB): ${w.def.command}`);
+    } catch (err: any) {
+      log.line(`Worker ${w.def.name} did not start: ${err.message}`);
+    }
+  }
+  return { started, stopped };
+}
+
+async function syncWorkersById(siteId: string) {
+  const [site] = await db.select().from(sites).where(eq(sites.id, siteId)).limit(1);
+  if (!site || site.desiredStatus === "deleted") return { skipped: true };
+  return syncWorkers(site);
 }
 
 // ─── Delete ──────────────────────────────────────────────────────────────────
@@ -1015,6 +1150,7 @@ export const hostingWorker = new Worker<DeployJobData>(
 
     if (job.name === "delete-site") return withSiteLock(siteId, () => deleteSite(siteId));
     if (job.name === "deploy-site") return withSiteLock(siteId, () => deploySite(job));
+    if (job.name === "sync-workers") return withSiteLock(siteId, () => syncWorkersById(siteId));
     return undefined;
   },
   { connection, concurrency: Math.max(1, Number(process.env.DEPLOY_CONCURRENCY || 2)) }

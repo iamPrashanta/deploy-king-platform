@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import parser from "cron-parser";
-import { db, automations, automationRuns, type Automation, type AutomationGraph } from "@dbbkp/db";
-import { eq } from "drizzle-orm";
+import { db, automations, automationRuns, users, type Automation, type AutomationGraph, type Site } from "@dbbkp/db";
+import { and, eq } from "drizzle-orm";
 import { automationQueue } from "../queues";
+import { publicAppUrl } from "../config";
 
 export const TRIGGER_TYPES = ["manual", "schedule", "webhook", "deployment"] as const;
 const MAX_NODES = 100;
@@ -87,4 +88,27 @@ export async function enqueueRun(automationId: string, trigger: string, input: u
   await automationQueue.add("run", { runId: run.id }, { removeOnComplete: 200, removeOnFail: 200 });
   await db.update(automations).set({ lastRunAt: new Date(), lastRunStatus: "queued" }).where(eq(automations.id, automationId));
   return run;
+}
+
+/**
+ * Starts the workflows that listen for something happening to a running app
+ * (today: "keeps crashing"). Deploy results are fired by the worker, which owns deploys.
+ */
+export async function fireAppEvent(site: Pick<Site, "id" | "domain" | "userId">, event: "crashing", data: Record<string, unknown>) {
+  const candidates = await db.select().from(automations).where(and(eq(automations.enabled, true), eq(automations.triggerType, "deployment")));
+  let started = 0;
+  for (const a of candidates) {
+    const t = a.graph.nodes.find((n) => n.type === "trigger.deployment");
+    if (String(t?.data?.event || "any") !== event) continue; // "any" means any deploy result, not app events
+    const wantSite = String(t?.data?.siteId || "");
+    if (wantSite && wantSite !== site.id) continue;
+    if (a.userId !== site.userId) {
+      // Only an admin's workflow hears about other people's apps.
+      const [u] = await db.select({ role: users.role }).from(users).where(eq(users.id, a.userId)).limit(1);
+      if (u?.role !== "admin") continue;
+    }
+    await enqueueRun(a.id, "app", { event, app: site.domain, appId: site.id, url: publicAppUrl(site.domain), ...data });
+    started += 1;
+  }
+  return started;
 }

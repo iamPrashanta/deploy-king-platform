@@ -8,7 +8,7 @@ import { router, protectedProcedure } from "../trpc";
 import { db, gitProviders } from "@dbbkp/db";
 import { desc, eq } from "drizzle-orm";
 import { encrypt } from "@dbbkp/security";
-import { analyzeProject, gitAuthArgs, redactToken, slugify } from "@dbbkp/buildplan";
+import { analyzeProject, appFolders, gitAuthArgs, normalizeRootDirectory, redactToken, resolveBuildRoot, slugify } from "@dbbkp/buildplan";
 import { githubRepos, githubUser, providerWithToken } from "../../services/github";
 import { isValidBranch, isValidRepoUrl } from "../../services/validation";
 
@@ -112,6 +112,7 @@ export const gitRouter = router({
         providerId: z.string().uuid().nullish(),
         type: z.enum(["auto", "static", "node", "python", "php", "go", "docker"]).optional(),
         port: z.number().int().min(1).max(65535).nullish(),
+        rootDirectory: z.string().max(255).nullish(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -137,8 +138,19 @@ export const gitRouter = router({
           .map((f) => ({ name: f.name, dir: f.isDirectory() }))
           .sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name))
           .slice(0, 60);
-        const report = analyzeProject(dir, { type: input.type ?? "auto", port: input.port ?? null });
+        // The check looks at the folder that will be built, which is not always the repository root.
+        let buildRoot: string;
+        let rootDirectory: string | null;
+        try {
+          rootDirectory = normalizeRootDirectory(input.rootDirectory);
+          buildRoot = resolveBuildRoot(dir, rootDirectory);
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        const report = analyzeProject(buildRoot, { type: input.type ?? "auto", port: input.port ?? null });
         return {
+          rootDirectory,
+          folders: appFolders(dir),
           name: slugify(input.repoUrl.split("/").pop() || "app"),
           branch: input.branch,
           commit: {
