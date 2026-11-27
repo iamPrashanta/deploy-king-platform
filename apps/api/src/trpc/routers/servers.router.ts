@@ -163,7 +163,7 @@ export const serversRouter = router({
   }),
 
   /** Step 3: the fingerprint the server shows. */
-  probe: adminProcedure.input(z.object({ id })).mutation(async ({ input }) => friendly(probe(await loadServer(input.id)))),
+  probe: adminProcedure.input(z.object({ id, fresh: z.boolean().optional() })).mutation(async ({ input }) => friendly(probe(await loadServer(input.id), { fresh: input.fresh }))),
 
   trust: adminProcedure.input(z.object({ id, fingerprint: z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/), replace: z.boolean().optional() })).mutation(async ({ ctx, input }) => {
     const s = await loadServer(input.id);

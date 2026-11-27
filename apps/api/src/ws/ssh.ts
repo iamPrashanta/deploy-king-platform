@@ -141,6 +141,12 @@ async function open(ws: WebSocket, user: AuthedUser, msg: any, ip: string | null
     }
     return fail(code, e?.message ?? "The terminal could not be opened.");
   }
+  // The browser may have gone away while the server was answering: do not leave a shell open for nobody.
+  if (ws.readyState !== WebSocket.OPEN) {
+    try { stream.close(); } catch {}
+    client.end();
+    return;
+  }
 
   const [row] = await db.insert(sshSessions).values({ serverId: s.id, userId: user.sub, actor: user.username, ip }).returning();
   let rec: fs.WriteStream | null = null;

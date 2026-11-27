@@ -124,9 +124,11 @@ async function main() {
 
     pass((await msg(admin.servers.trust({ id: srv.id, fingerprint: "SHA256:" + "A".repeat(43) }))).includes("not the fingerprint you confirmed"), "trusting a fingerprint the server does not show is refused");
     await admin.servers.trust({ id: srv.id, fingerprint: pr.fingerprint });
+    const [trustedRow] = await db.select().from(sshServers).where(eq(sshServers.id, srv.id));
+    pass(trustedRow.hostKeyFingerprint === pr.fingerprint && trustedRow.status === "connected", "trusting the fingerprint of a server whose key works makes it Connected", trustedRow.status);
     const t1: any = await admin.servers.test({ id: srv.id });
     const ck = (k: string) => t1.checks.find((c: any) => c.key === k);
-    pass(t1.ok && /Reachable on port/.test(ck("reach")?.title) && /Signed in as deploy with the key/.test(ck("auth")?.title), "the connection test: reachable, and signed in with the new key", JSON.stringify(t1.checks.map((c: any) => c.title)));
+    pass(t1.ok && /Reachable on port/.test(ck("reach")?.title) && /Signed in as deploy with the new key/.test(ck("auth")?.title), "the connection test: reachable, and signed in with the new key", JSON.stringify(t1.checks.map((c: any) => c.title)));
     pass(ck("system")?.detail.includes("vCPU") && ck("password")?.state === "warn" && /still on/.test(ck("password")?.title) && !!ck("sudo") && !!ck("docker"), "it reports the system, that password sign-in is still on, sudo and Docker", `${ck("system")?.title} · ${ck("sudo")?.title} · ${ck("docker")?.title}`);
     const s2: any = await admin.servers.get({ id: srv.id });
     pass(s2.status === "connected" && s2.system.cpus > 0 && s2.system.memoryMb > 0 && s2.system.diskFreeGb != null, "the server is Connected, with its CPU, memory and disk", JSON.stringify(s2.system).slice(0, 160));

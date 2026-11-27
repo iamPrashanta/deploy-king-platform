@@ -172,7 +172,7 @@ export async function openServer(
     jump?.end();
     if (e instanceof SshError && e.code === "hostkey" && e.seen) {
       const was = expect!;
-      const note = `The server's fingerprint changed from ${was} to ${e.seen.fingerprint}. Deploy King refused to connect.`;
+      const note = `The server's fingerprint changed from ${was} to ${e.seen.fingerprint}.`;
       await db.update(sshServers).set({ status: "host_key_changed", statusNote: note, updatedAt: new Date() }).where(eq(sshServers.id, s.id));
       audit("ssh_host_refused", o.actor ?? { id: undefined as any }, { id: s.id, name: s.name }, { expected: was, shown: e.seen.fingerprint, trusted: !!s.hostKeyFingerprint });
     }
@@ -206,7 +206,7 @@ export async function runChecks(s: SshServer, o: { passphrase?: string; actor: A
     try {
       const key = s.keyId && s.authMethod !== "password" ? await loadKey(s.keyId) : null;
       checks.push(key
-        ? { key: "auth", state: "ok", title: `Signed in as ${s.username} with the key`, detail: `${KEY_TYPE_LABEL[key.type] ?? key.type} · ${key.fingerprint.slice(0, 11)}…${key.fingerprint.slice(-4)}` }
+        ? { key: "auth", state: "ok", title: `Signed in as ${s.username} with the ${s.setupDone ? "" : "new "}key`, detail: `${KEY_TYPE_LABEL[key.type] ?? key.type} · ${key.fingerprint.slice(0, 11)}…${key.fingerprint.slice(-4)}` }
         : { key: "auth", state: "warn", title: `Signed in as ${s.username} with the stored password`, detail: "Less safe: switch to a key." });
       // 3. System
       const r = await exec(c.client, FACTS_SCRIPT);
@@ -252,16 +252,17 @@ export async function runChecks(s: SshServer, o: { passphrase?: string; actor: A
 }
 
 /** Learns the host key without signing in (step 3 before anything was installed). */
-export async function probe(s: SshServer) {
-  if (s.hostKeyFingerprint) return { type: s.hostKeyType, fingerprint: s.hostKeyFingerprint, trusted: true };
-  if (s.seenHostKeyFingerprint) return { type: s.seenHostKeyType, fingerprint: s.seenHostKeyFingerprint, trusted: false };
+export async function probe(s: SshServer, opts: { fresh?: boolean } = {}) {
+  if (s.hostKeyFingerprint && !opts.fresh) return { type: s.hostKeyType, fingerprint: s.hostKeyFingerprint, trusted: true };
+  if (s.seenHostKeyFingerprint && !opts.fresh) return { type: s.seenHostKeyType, fingerprint: s.seenHostKeyFingerprint, trusted: false };
   let sock;
   let jump;
   if (s.jumpServerId) ({ sock, jump } = await viaJump(s, 0));
   try {
     const p = await probeHostKey(target(s), sock);
-    await db.update(sshServers).set({ seenHostKeyType: p.type, seenHostKeyFingerprint: p.fingerprint }).where(eq(sshServers.id, s.id));
-    return { type: p.type, fingerprint: p.fingerprint, trusted: false };
+    // "fresh" only looks (the Review of a changed fingerprint); the first look pins what the server showed.
+    if (!opts.fresh) await db.update(sshServers).set({ seenHostKeyType: p.type, seenHostKeyFingerprint: p.fingerprint }).where(eq(sshServers.id, s.id));
+    return { type: p.type, fingerprint: p.fingerprint, trusted: p.fingerprint === s.hostKeyFingerprint };
   } finally {
     jump?.end();
   }
@@ -286,7 +287,8 @@ export async function trust(s: SshServer, fingerprint: string, actor: Actor, opt
   await db.update(sshServers).set({
     hostKeyType: shown.type, hostKeyFingerprint: fingerprint, hostKeyTrustedAt: new Date(),
     seenHostKeyType: shown.type, seenHostKeyFingerprint: fingerprint,
-    ...(s.status === "host_key_changed" ? { status: "connected", statusNote: null } : {}),
+    // Trusting is the last thing missing for a server whose sign-in already works ("Not verified yet").
+    ...(s.status === "host_key_changed" || s.status === "waiting_trust" ? { status: "connected", statusNote: null } : {}),
     updatedAt: new Date(),
   }).where(eq(sshServers.id, s.id));
   audit("ssh_host_trust", actor, { id: s.id, name: s.name }, { fingerprint, type: shown.type, replaced: previous ?? undefined });
