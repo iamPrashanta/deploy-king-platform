@@ -35,6 +35,11 @@ const nextConfig = {
         destination: `${API}/mcp`,
       },
       {
+        // the assistant's ZIP upload (POST /mcp/upload)
+        source: "/mcp/:path*",
+        destination: `${API}/mcp/:path*`,
+      },
+      {
         source: "/llms.txt",
         destination: `${API}/llms.txt`,
       },
