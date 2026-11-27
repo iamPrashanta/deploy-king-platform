@@ -8,6 +8,7 @@ import { TRPCError } from "@trpc/server";
 import { logAudit } from "@dbbkp/audit";
 import { issueSession } from "../../services/team";
 import * as twoStep from "../../services/twofactor";
+import { limited } from "../../services/ratelimit";
 
 // ─── UTILITIES ───────────────────────────────────────────────────────────────
 
@@ -45,24 +46,28 @@ export const authRouter = router({
    */
   login: publicProcedure
     .input(z.object({ username: z.string(), password: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      const [user] = await db.select().from(users).where(eq(users.username, input.username)).limit(1);
-      if (!user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
+    .mutation(({ ctx, input }) =>
+      // Wrong passwords from one address are limited (services/ratelimit.ts).
+      limited("password", ctx.ip, async () => {
+        const [user] = await db.select().from(users).where(eq(users.username, input.username)).limit(1);
+        if (!user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
 
-      const valid = await bcrypt.compare(input.password, user.passwordHash);
-      if (!valid) throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
-      if (user.suspendedAt) throw new TRPCError({ code: "FORBIDDEN", message: "This account is suspended. Ask the owner of this panel." });
-      const next = await twoStep.nextStep(user);
-      if (next !== "none") return { step: next, challenge: twoStep.signChallenge(user.id, next) };
-      return issueSession(user, { ip: ctx.ip, userAgent: ctx.userAgent, method: "password" });
-    }),
+        const valid = await bcrypt.compare(input.password, user.passwordHash);
+        if (!valid) throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
+        if (user.suspendedAt) throw new TRPCError({ code: "FORBIDDEN", message: "This account is suspended. Ask the owner of this panel." });
+        const next = await twoStep.nextStep(user);
+        if (next !== "none") return { step: next, challenge: twoStep.signChallenge(user.id, next) };
+        return issueSession(user, { ip: ctx.ip, userAgent: ctx.userAgent, method: "password" });
+      })
+    ),
 
   /** The second step: a code from the authenticator app, or a recovery code. Five wrong codes lock it for 15 minutes. */
   loginCode: publicProcedure
     .input(z.object({ challenge: z.string().min(20).max(2000), code: z.string().trim().min(6).max(20) }))
     .mutation(async ({ ctx, input }) => {
       const user = await twoStep.challengeUser(twoStep.readChallenge(input.challenge, "code"));
-      const ok = await twoStep.verify(user.id, input.code);
+      // Five wrong codes lock the account's code entry; wrong codes from one address are limited across accounts too.
+      const ok = await limited("code", ctx.ip, () => twoStep.verify(user.id, input.code));
       if (ok.method === "recovery code") logAudit("two_factor_recovery_used", { actorId: user.id, targetId: user.id, targetType: "user", targetName: user.username, metadata: { left: ok.recoveryLeft }, ip: ctx.ip ?? undefined });
       return { ...(await issueSession(user, { ip: ctx.ip, userAgent: ctx.userAgent, method: ok.method })), recoveryLeft: ok.recoveryLeft };
     }),
@@ -78,7 +83,7 @@ export const authRouter = router({
     .input(z.object({ challenge: z.string().min(20).max(2000), code: z.string().trim().min(6).max(10) }))
     .mutation(async ({ ctx, input }) => {
       const user = await twoStep.challengeUser(twoStep.readChallenge(input.challenge, "setup"));
-      const { recoveryCodes } = await twoStep.confirmSetup(user.id, input.code);
+      const { recoveryCodes } = await limited("code", ctx.ip, () => twoStep.confirmSetup(user.id, input.code));
       logAudit("two_factor_enable", { actorId: user.id, targetId: user.id, targetType: "user", targetName: user.username, metadata: { duringSignIn: true }, ip: ctx.ip ?? undefined });
       return { recoveryCodes, ...(await issueSession(user, { ip: ctx.ip, userAgent: ctx.userAgent, method: "2-step" })) };
     }),

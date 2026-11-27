@@ -310,7 +310,8 @@ export const teamRouter = router({
     if (state !== "waiting") return { state, inviter: inv.inviter };
     const apps = inv.allApps || !inv.siteIds.length ? [] : await db.select({ domain: sites.domain }).from(sites).where(inArray(sites.id, inv.siteIds));
     const twoStepRequired = (await twoStep.teamRules()).requireTwoFactor;
-    return { state, email: inv.email, role: inv.role, allApps: inv.allApps, apps: apps.map((a) => a.domain), grants: inv.grants, note: inv.note, inviter: inv.inviter, expiresAt: inv.expiresAt, twoStepRequired };
+    const teamName = (await getEmailSettings())?.teamName?.trim() || null;
+    return { state, email: inv.email, role: inv.role, allApps: inv.allApps, apps: apps.map((a) => a.domain), grants: inv.grants, note: inv.note, inviter: inv.inviter, expiresAt: inv.expiresAt, twoStepRequired, teamName };
   }),
 
   /** Public: accept an invitation by choosing a username and password. Signs the new member in. */

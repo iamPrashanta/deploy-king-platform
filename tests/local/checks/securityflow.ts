@@ -207,6 +207,12 @@ async function main() {
   hooks.length = 0;
   const tst: any = await owner.notify.testAlert();
   pass(tst.webhook === "sent" && hooks.length === 1 && hooks[0].body.text.includes("Test alert"), "Send test alert reports what each channel answered");
+  hooks.length = 0;
+  const w1 = await notify.alertWorkerCrashing(A, { name: "queue", container: "dbbkp-shop-api-worker-queue-1" });
+  const w2 = await notify.alertWorkerCrashing(A, { name: "queue", container: "dbbkp-shop-api-worker-queue-1" });
+  const w3 = await notify.alertWorkerCrashing(A, { name: "mailer", container: "dbbkp-shop-api-worker-mailer-1" });
+  const ap = await notify.alertAppCrashing(A, { restarts: 6, outOfMemory: true, lastLine: "FATAL ERROR: heap limit" });
+  pass(w1.sent && !w2.sent && w2.reason === "repeat" && w3.sent && ap.sent && hooks.length === 3 && hooks[0].body.text.includes('Worker "queue"') && hooks[2].body.text.includes("ran out of memory"), "a crashing worker alerts once an hour, each worker and the app on their own");
 
   // ── the server watch: an urgent finding alerts
   hooks.length = 0;
@@ -260,6 +266,21 @@ async function main() {
   pass((await db.select().from(githubAppInstallations)).length === 1 && ((await owner.git.app()) as any).installations[0].repositorySelection === "selected", "an installation removed on GitHub goes away here on Refresh");
   pass((await code(owner.git.appRemove({ confirm: "remove" as const }))) === "OK" && !(await gh.getApp()) && (await db.select().from(githubAppInstallations)).length === 0, "Remove forgets the app and its installations");
   gh.setGithubFetchForTests(null);
+
+  // ── wrong passwords and codes from one address are limited, across accounts
+  const rl = await import(root + "/src/services/ratelimit");
+  rl.resetLimitsForTests();
+  const from = (ip: string) => appRouter.createCaller({ user: null, ip, userAgent: "curl/8" });
+  const badTries: string[] = [];
+  for (let i = 0; i < 21; i++) badTries.push(await code(from("203.0.113.7").auth.login({ username: i % 2 ? "owner" : "nobody", password: "wrong-" + i })));
+  pass(badTries.slice(0, 20).every((c) => c === "UNAUTHORIZED") && badTries[20] === "TOO_MANY_REQUESTS", "after 20 wrong passwords from one address, it must wait", badTries[20]);
+  pass((await code(from("203.0.113.7").auth.login({ username: "owner", password: PW }))) === "TOO_MANY_REQUESTS", "even the right password waits");
+  pass((await code(from("198.51.100.4").auth.login({ username: "owner", password: PW }))) === "OK", "another address is not affected");
+  rl.resetLimitsForTests();
+  const t1 = Date.now();
+  for (let i = 0; i < 25; i++) rl.noteFailure("code", "203.0.113.8", t1);
+  pass((() => { try { rl.checkLimit("code", "203.0.113.8", t1 + 14 * 60_000); return false; } catch { return true; } })() && (() => { try { rl.checkLimit("code", "203.0.113.8", t1 + 16 * 60_000); return true; } catch { return false; } })(), "wrong codes from one address wait 15 minutes");
+  rl.resetLimitsForTests();
 
   await new Promise((r) => setTimeout(r, 600));
   const kinds = new Set((await db.select({ action: auditLogs.action }).from(auditLogs)).map((a: any) => a.action));

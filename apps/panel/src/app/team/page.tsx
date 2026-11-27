@@ -66,12 +66,13 @@ export default function TeamPage() {
   const [inviting, setInviting] = useState(false);
   const [emails, setEmails] = useState("");
   const [note, setNote] = useState("");
+  const [days, setDays] = useState<1 | 3 | 7 | 14>(7);
   const [access, setAccess] = useState<Access>(emptyAccess);
   const [links, setLinks] = useState<Link_[] | null>(null);
 
   const refresh = () => { utils.team.members.invalidate(); utils.team.invitations.invalidate(); utils.team.requests.invalidate(); utils.team.rules.invalidate(); };
   const onError = (e: unknown) => toast.error(errMsg(e));
-  const invite = trpc.team.invite.useMutation({ onSuccess: (out) => { setInviting(false); setEmails(""); setNote(""); setAccess(emptyAccess); setLinks(out as any); refresh(); }, onError });
+  const invite = trpc.team.invite.useMutation({ onSuccess: (out) => { setInviting(false); setEmails(""); setNote(""); setDays(7); setAccess(emptyAccess); setLinks(out as any); refresh(); }, onError });
   const renew = trpc.team.renewInvite.useMutation({
     onSuccess: (out: any, v: any) => {
       if (v?.send && out.emailed) toast.success(`Sent again to ${out.email}. The old link no longer works.`);
@@ -254,11 +255,11 @@ export default function TeamPage() {
         onClose={() => setInviting(false)}
         width={720}
         title="Invite a member"
-        subtitle="Each person gets their own link. It works once, only for that address."
+        subtitle="They get an email with a link. The link works once, only for that address."
         footer={
           <>
             <button className="btn" onClick={() => setInviting(false)}>Cancel</button>
-            <button className="btn btn-primary" disabled={!emailsOk || invite.isLoading} onClick={() => invite.mutate({ emails: emailList, note: note.trim() || undefined, expiresInDays: 7, origin: origin(), ...access })}>
+            <button className="btn btn-primary" disabled={!emailsOk || invite.isLoading} onClick={() => invite.mutate({ emails: emailList, note: note.trim() || undefined, expiresInDays: days, origin: origin(), ...access })}>
               {invite.isLoading ? <Spinner /> : <><Mail size={14} /> Send invitation</>}
             </button>
           </>
@@ -268,14 +269,24 @@ export default function TeamPage() {
           <div>
             <label className="label" htmlFor="inv-emails">Email addresses</label>
             <input id="inv-emails" className="input" value={emails} onChange={(e) => setEmails(e.target.value)} placeholder="lena@example.com, sam@example.com" autoFocus />
-            <div className="hint">Separate several addresses with a comma. The invitation expires after 7 days.</div>
+            <div className="hint">Separate several addresses with a comma. Each person gets their own invitation.</div>
           </div>
-          <AccessEditor value={access} onChange={setAccess} apps={apps} canMakeAdmin={isOwner} />
           <div>
             <label className="label" htmlFor="inv-note">Note in the email (optional)</label>
             <input id="inv-note" className="input" maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Welcome! Start with shop-api." />
           </div>
+          <AccessEditor value={access} onChange={setAccess} apps={apps} canMakeAdmin={isOwner} />
+          <div>
+            <span className="label">The invitation expires after</span>
+            <div className="seg">
+              {([[7, "7 days"], [1, "24 hours"], [3, "3 days"], [14, "14 days"]] as const).map(([v, l]) => (
+                <button key={v} type="button" className={cx(days === v && "on")} onClick={() => setDays(v)}>{l}</button>
+              ))}
+            </div>
+          </div>
+          {r?.requireTwoFactor && <div className="notice info small"><ShieldCheck size={15} /> <span>This team requires 2-step sign-in. {emailList.length === 1 ? emailList[0] : "They"} set{emailList.length === 1 ? "s" : ""} it up right after accepting.</span></div>}
           <Summary access={access} />
+          <div className="small faint">Emails are sent with the mail settings under <Link href="/settings?tab=email" className="link">Settings › Email</Link>. If email is not set up, you get a link to pass on yourself.</div>
         </div>
       </Dialog>
 

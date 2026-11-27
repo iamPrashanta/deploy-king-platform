@@ -61,7 +61,7 @@ export default function AcceptInvitePage() {
             </>
           ) : (
             <>
-              <h1>Join the team</h1>
+              <h1>{d.teamName ? `Join ${d.teamName}` : "Join the team"}</h1>
               <p className="sub">{d.inviter ? `${d.inviter} invited ` : "You are invited: "}<strong style={{ color: "var(--text)" }}>{d.email}</strong> as {ROLE[d.role]?.label ?? d.role}.</p>
               {d.note && <div className="notice small" style={{ marginBottom: 16 }}>&ldquo;{d.note}&rdquo;</div>}
               <div className="card card-pad" style={{ background: "var(--card-2)", marginBottom: 20 }}>

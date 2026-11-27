@@ -99,7 +99,7 @@ export default function RolesPage() {
         </div>
       </section>
 
-      <div className="grid g3">
+      <div className="grid g2">
         <section className="card card-pad">
           <div className="strong" style={{ marginBottom: 6 }}>One owner</div>
           <div className="small muted">The owner is the first admin. Nobody can change or remove them, and only the owner adds, changes or removes admins.</div>
@@ -111,6 +111,10 @@ export default function RolesPage() {
         <section className="card card-pad">
           <div className="strong" style={{ marginBottom: 6 }}>Their apps</div>
           <div className="small muted">The apps shared with a member, plus every app they created themselves. Set them on each member&apos;s page; changes apply at once.</div>
+        </section>
+        <section className="card card-pad">
+          <div className="row" style={{ marginBottom: 6, gap: 8 }}><span className="strong">Your own roles</span><span className="badge square">Not yet</span></div>
+          <div className="small muted">Roles of your own, such as &ldquo;Support&rdquo; with logs and restarts only, are not available yet. Until then, start from Developer or Viewer and use the switches on each member&apos;s page.</div>
         </section>
       </div>
     </div>
