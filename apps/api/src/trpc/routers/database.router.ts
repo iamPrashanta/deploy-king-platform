@@ -107,6 +107,9 @@ export const databaseRouter = router({
     return Promise.all(rows.map(describeDb));
   }),
 
+  /** For the sidebar: how many databases this user can see. */
+  count: protectedProcedure.query(async ({ ctx }) => (await visibleRows(ctx.user!)).length),
+
   get: protectedProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => describeDb(await requireDb(ctx.user!, input.id))),
 
   create: permissionProcedure(PERMISSIONS.DATABASE_CREATE)

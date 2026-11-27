@@ -140,6 +140,9 @@ async function main() {
   pass(second.lastCheckOk && (await audits("backup_destination")) === 1, "a folder destination is checked (write, read back, remove) before it is added, and audited");
   pass((await code(owner.backup.removeDestination({ id: local.id }))) === "BAD_REQUEST", "This server cannot be removed");
   pass((await dev.backup.destinations()).destinations.every((d: any) => d.location === null), "members see destination names, not where they are");
+  const renamed: any = await owner.backup.updateDestination({ id: second.id, name: "Spare disk", keepLast: 1 });
+  const checked: any = await owner.backup.checkDestination({ id: second.id });
+  pass(renamed.name === "Spare disk" && checked.ok && (await audits("backup_destination")) === 3 && (await code(dev.backup.updateDestination({ id: local.id, name: "x", keepLast: 1 }))) === "FORBIDDEN" && (await code(dev.backup.checkDestination({ id: local.id }))) === "FORBIDDEN", "an admin renames a destination, sets how many it keeps and checks it again, audited; members cannot");
 
   // ── Back up now ──
   const target = { type: "database" as const, id: shopDb.id };

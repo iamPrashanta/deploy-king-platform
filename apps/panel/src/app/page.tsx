@@ -27,7 +27,7 @@ export default function OverviewPage() {
   const setup = [
     { done: (providers.data?.length ?? 0) > 0, title: "Connect GitHub", text: "Deploy private repositories and redeploy on every push.", href: "/settings?tab=github", icon: <Github size={16} /> },
     { done: (d?.apps.total ?? 0) > 0, title: "Deploy your first app", text: "From a repository, a Docker image or a template.", href: "/apps/new", icon: <Rocket size={16} /> },
-    { done: false, title: "Back up your databases", text: "Install the dbbkp CLI on your database servers.", href: "/backup-cli", icon: <HardDriveDownload size={16} /> },
+    { done: false, title: "Back up your databases", text: "Set a schedule; every backup is checked with SHA-256 and copied off the server.", href: "/backups", icon: <HardDriveDownload size={16} /> },
   ];
   const showSetup = d && (d.apps.total === 0 || !providers.data?.length);
 

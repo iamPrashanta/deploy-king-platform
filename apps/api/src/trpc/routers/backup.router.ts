@@ -220,10 +220,11 @@ export const backupRouter = router({
   updateDestination: adminProcedure
     .input(z.object({ id: z.string().uuid(), name: z.string().trim().min(1).max(100), keepLast: z.number().int().min(1).max(365).nullable() }))
     .mutation(async ({ ctx, input }) => {
+      const [before] = await db.select().from(backupDestinations).where(eq(backupDestinations.id, input.id)).limit(1);
+      if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Destination not found" });
       const [d] = await db.update(backupDestinations).set({ name: input.name, keepLast: input.keepLast }).where(eq(backupDestinations.id, input.id)).returning();
-      if (!d) throw new TRPCError({ code: "NOT_FOUND", message: "Destination not found" });
-      audit(ctx, "backup_destination", { id: d.id, type: "backup_destination", name: d.name }, { keepLast: d.keepLast });
-      return d;
+      audit(ctx, "backup_destination", { id: d!.id, type: "backup_destination", name: d!.name }, { keepLast: d!.keepLast, before: { name: before.name, keepLast: before.keepLast } });
+      return d!;
     }),
 
   checkDestination: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
@@ -231,6 +232,7 @@ export const backupRouter = router({
     if (!d) throw new TRPCError({ code: "NOT_FOUND", message: "Destination not found" });
     const r = await checkDestination(d);
     await db.update(backupDestinations).set({ lastCheckAt: new Date(), lastCheckOk: r.ok, lastCheckMessage: r.message }).where(eq(backupDestinations.id, d.id));
+    audit(ctx, "backup_destination", { id: d.id, type: "backup_destination", name: d.name }, { checked: true, ok: r.ok });
     return r;
   }),
 
