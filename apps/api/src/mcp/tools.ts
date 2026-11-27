@@ -440,16 +440,22 @@ export const TOOLS: Tool[] = [
         app: appRef,
         set: strMap("Variables to add or change, e.g. {\"API_URL\": \"https://…\"}"),
         remove: strList("Names of variables to remove"),
+        replaceAll: bool("Make set the complete list: every other variable of the app is removed", false),
         restart: bool("Restart the app now so the change takes effect", false),
       },
       ["app"]
     ),
     annotations: { readOnlyHint: false, destructiveHint: true },
-    logArgs: (a) => ({ app: a.app, set: keysOf(a.set), remove: a.remove, restart: a.restart }),
+    logArgs: (a) => ({ app: a.app, set: keysOf(a.set), remove: a.remove, replaceAll: a.replaceAll, restart: a.restart }),
     run: async (a, t) => {
       const s = await findApp(t, a.app);
       const set = Object.entries((a.set ?? {}) as Record<string, string>).map(([key, value]) => ({ key, value }));
-      const remove: string[] = a.remove ?? [];
+      const remove: string[] = [...(a.remove ?? [])];
+      if (a.replaceAll) {
+        if (!set.length) throw new ToolError("replaceAll needs the complete list in set");
+        const keep = new Set(set.map((v) => v.key));
+        for (const v of await t.caller.sites.envList({ id: s.id })) if (!keep.has(v.key) && !remove.includes(v.key)) remove.push(v.key);
+      }
       if (!set.length && !remove.length) throw new ToolError("Nothing to change: pass set and/or remove");
       if (set.length) await t.caller.sites.envSetMany({ id: s.id, vars: set });
       for (const key of remove) await t.caller.sites.envUnset({ id: s.id, key });
@@ -489,6 +495,137 @@ export const TOOLS: Tool[] = [
         if (!["queued", "running"].includes(r.status) || Date.now() > end) return { workflow: hits[0].name, runId, ...runSummary(r) };
         await sleep(1500);
       }
+    },
+  },
+
+  // ─── Scheduled jobs, workers and databases (assistant agent) ─────────────
+  {
+    name: "list_scheduled_jobs",
+    title: "List scheduled jobs",
+    description: "An app's scheduled jobs (commands that run inside it on a schedule): schedule in words, time zone, where it runs, whether it is on, and how the last run went.",
+    scope: "read",
+    inputSchema: obj({ app: appRef }, ["app"]),
+    annotations: { readOnlyHint: true },
+    run: async (a, t) => {
+      const s = await findApp(t, a.app);
+      const jobs: any[] = await t.caller.cron.list({ siteId: s.id });
+      return {
+        app: s.domain,
+        jobs: jobs.map((j) => ({ id: j.id, name: j.name, command: j.command, schedule: j.schedule, words: j.words, timezone: j.timezone, runIn: j.runIn, active: j.active, nextRunAt: j.nextRunAt, lastRun: j.lastRunAt ? { at: j.lastRunAt, status: j.lastStatus, exitCode: j.lastExitCode } : null })),
+      };
+    },
+  },
+  {
+    name: "add_scheduled_job",
+    title: "Add a scheduled job",
+    description: "Adds a scheduled job to an app: a command that runs inside the app's container (or one of its workers) on a five-field cron schedule such as \"0 6 * * *\", in a time zone.",
+    scope: "deploy",
+    inputSchema: obj(
+      {
+        app: appRef,
+        name: str("Short name, e.g. Daily report", { maxLength: 120 }),
+        command: str("The command, e.g. node scripts/report.js"),
+        schedule: str("Five-field cron text, or @hourly / @daily / @weekly", { maxLength: 100 }),
+        timezone: str("IANA time zone, e.g. Asia/Kolkata", { maxLength: 64 }),
+        runIn: str("web (the app itself) or worker:<name>", { maxLength: 60 }),
+        timeoutSeconds: int("Stop a run after this long", { minimum: 10, maximum: 3600, default: 600 }),
+        runNow: bool("Also run it once now", false),
+      },
+      ["app", "name", "command", "schedule"]
+    ),
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: async (a, t) => {
+      const s = await findApp(t, a.app);
+      const j: any = await t.caller.cron.create({
+        siteId: s.id, name: a.name, command: a.command, schedule: a.schedule, timezone: a.timezone || "UTC", runIn: a.runIn || "web", timeoutSec: a.timeoutSeconds, notifyOnFailure: true, runNow: a.runNow,
+      });
+      return { app: s.domain, job: { id: j.id, name: j.name, schedule: j.schedule, words: j.words, timezone: j.timezone, nextRunAt: j.nextRunAt } };
+    },
+  },
+  {
+    name: "list_workers",
+    title: "List workers",
+    description: "An app's workers (background processes from the same image and variables, without web traffic): command, copies, memory per copy, and whether they are running or crashing.",
+    scope: "read",
+    inputSchema: obj({ app: appRef }, ["app"]),
+    annotations: { readOnlyHint: true },
+    run: async (a, t) => {
+      const s = await findApp(t, a.app);
+      const r: any = await t.caller.workers.list({ siteId: s.id });
+      return {
+        app: s.domain,
+        deployed: r.deployed,
+        workersMemoryMb: r.appWorkersMb,
+        workers: r.workers.map((w: any) => ({ id: w.id, name: w.name, command: w.command, copies: w.copies, memoryMb: w.memoryLimit, enabled: w.enabled, status: w.status })),
+      };
+    },
+  },
+  {
+    name: "add_worker",
+    title: "Add a worker",
+    description: "Adds a worker to an app: a background process (queue consumer, email sender) started from the app's image with its variables. Each copy holds its memory limit; check_fit tells whether it fits.",
+    scope: "deploy",
+    inputSchema: obj(
+      {
+        app: appRef,
+        name: str("Lowercase name, e.g. emails", { maxLength: 30 }),
+        command: str("The command, e.g. node dist/worker.js"),
+        copies: int("How many copies", { minimum: 1, maximum: 8, default: 1 }),
+        memoryMb: int("Memory limit of each copy in MB", { minimum: 64, maximum: 16384, default: 256 }),
+      },
+      ["app", "name", "command"]
+    ),
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: async (a, t) => {
+      const s = await findApp(t, a.app);
+      const w: any = await t.caller.workers.create({ siteId: s.id, name: a.name, command: a.command, copies: a.copies, memoryLimit: a.memoryMb, restart: true, gracefulStop: true, enabled: true });
+      return { app: s.domain, worker: { id: w.id, name: w.name, copies: w.copies, memoryMb: w.memoryLimit }, hint: "The worker starts from the app's current release." };
+    },
+  },
+  {
+    name: "list_databases",
+    title: "List databases",
+    description: "The databases on this server you can see (admins: all; others: those of their apps), with the app each belongs to. Passwords are never shown.",
+    scope: "read",
+    inputSchema: obj({}),
+    annotations: { readOnlyHint: true },
+    run: async (_a, t) => {
+      const [list, apps]: any[] = await Promise.all([t.caller.database.list(), t.caller.sites.list()]);
+      const domain = new Map(apps.map((s: any) => [s.id, s.domain]));
+      return { count: list.length, databases: list.map((d: any) => ({ id: d.id, name: d.name, type: d.type, user: d.dbUser, app: d.siteId ? domain.get(d.siteId) ?? d.siteId : null, createdAt: d.createdAt })) };
+    },
+  },
+  {
+    name: "create_database",
+    title: "Create a database",
+    description:
+      "Creates a PostgreSQL database and its user for an app. The password is made on the server and never returned: with variable (default DATABASE_URL) the connection URL is stored in that variable of the app. It applies on the app's next deploy or restart.",
+    scope: "deploy",
+    inputSchema: obj(
+      {
+        app: appRef,
+        name: str("Database name: lowercase letters, digits and _ (3-30), e.g. shop_api", { maxLength: 30 }),
+        user: str("Database user (3-30, lowercase letters, digits, _). Defaults to the name.", { maxLength: 30 }),
+        variable: str("App variable that gets the connection URL. Empty string to store none.", { maxLength: 100 }),
+      },
+      ["app", "name"]
+    ),
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: async (a, t) => {
+      const s = await findApp(t, a.app);
+      const r: any = await t.caller.database.create({ name: a.name, type: "pgsql", dbUser: a.user || a.name, siteId: s.id });
+      const variable = a.variable === undefined ? "DATABASE_URL" : String(a.variable).trim();
+      if (variable) {
+        const c = r.credentials;
+        const url = `postgres://${encodeURIComponent(c.username)}:${encodeURIComponent(c.password)}@${c.host}:${c.port}/${encodeURIComponent(c.database)}`;
+        await t.caller.sites.envSetMany({ id: s.id, vars: [{ key: variable, value: url }] });
+      }
+      return {
+        app: s.domain,
+        database: { id: r.instance.id, name: r.instance.name, type: r.instance.type, user: r.instance.dbUser },
+        variable: variable || undefined,
+        hint: variable ? `${variable} is set (the value is never shown). Call deploy_app with restartOnly to use it now.` : "Created. The password was not stored anywhere you can read.",
+      };
     },
   },
 

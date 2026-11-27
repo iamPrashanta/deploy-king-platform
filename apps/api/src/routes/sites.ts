@@ -4,7 +4,6 @@ import path from "path";
 import fs from "fs-extra";
 import crypto from "node:crypto";
 import os from "os";
-import AdmZip from "adm-zip";
 import { db, sites } from "@dbbkp/db";
 import { desc, eq } from "drizzle-orm";
 import { enqueueDeploy } from "../services/deploy";
@@ -12,6 +11,7 @@ import { DEFAULT_APP_MEMORY_MB, capacity, evaluateFit } from "../services/capaci
 import { visibleSites } from "../services/team";
 import { hasPermission, PERMISSIONS } from "../utils/rbac";
 import { isValidDomain, normalizeDomain, siteDocRoot } from "../services/validation";
+import { extractProjectZip, UnsafeArchiveError } from "../services/zipsite";
 import type { AuthedUser } from "../middleware/requireAuth";
 
 const router = express.Router();
@@ -52,27 +52,11 @@ router.post("/upload", upload.single("project"), async (req: any, res) => {
 
     const siteId = crypto.randomUUID();
     const sitePath = siteDocRoot(siteId);
-    await fs.ensureDir(sitePath);
-
-    // Refuse archives with entries that would land outside the site directory.
-    const zip = new AdmZip(file.path);
-    for (const entry of zip.getEntries()) {
-      const target = path.resolve(sitePath, entry.entryName);
-      if (target !== sitePath && !target.startsWith(sitePath + path.sep)) {
-        await fs.remove(sitePath);
-        return res.status(400).json({ error: "Archive contains an unsafe path" });
-      }
-    }
-    zip.extractAllTo(sitePath, true);
-
-    // A ZIP of a folder usually wraps everything in one top-level directory; unwrap it.
-    const entries = (await fs.readdir(sitePath)).filter((n) => n !== "__MACOSX");
-    if (entries.length === 1 && (await fs.stat(path.join(sitePath, entries[0]))).isDirectory()) {
-      const inner = path.join(sitePath, entries[0]);
-      for (const name of await fs.readdir(inner)) {
-        await fs.move(path.join(inner, name), path.join(sitePath, name), { overwrite: true });
-      }
-      await fs.remove(inner);
+    try {
+      await extractProjectZip(file.path, sitePath);
+    } catch (e) {
+      if (e instanceof UnsafeArchiveError) return res.status(400).json({ error: e.message });
+      throw e;
     }
 
     const [newSite] = await db

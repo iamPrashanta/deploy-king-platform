@@ -1,10 +1,18 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
 import { TRPCError } from "@trpc/server";
-import { db, mcpCalls } from "@dbbkp/db";
-import { lt } from "drizzle-orm";
+import multer from "multer";
+import os from "os";
+import path from "path";
+import fs from "fs-extra";
+import { db, mcpCalls, sites } from "@dbbkp/db";
+import { eq, lt } from "drizzle-orm";
 import { appRouter } from "../trpc";
 import { scopeAllows, verifyApiToken, type TokenAuth } from "../services/apiTokens";
-import { TOOLS, TOOL_BY_NAME, ToolError, type Tool } from "../mcp/tools";
+import { TOOLS, TOOL_BY_NAME, ToolError, appUrl, type Tool } from "../mcp/tools";
+import { BASE_DOMAIN } from "../config";
+import { enqueueDeploy } from "../services/deploy";
+import { siteDocRoot } from "../services/validation";
+import { extractProjectZip, UnsafeArchiveError } from "../services/zipsite";
 import { ArgError, checkArgs } from "../mcp/schema";
 
 /**
@@ -178,6 +186,92 @@ router.post("/", async (req: Request, res: Response) => {
   }
   if (!out.length) return res.status(202).end();
   res.json(batch ? out : out[0]);
+});
+
+// ─── ZIP upload for agents (the terminal and desktop assistants) ──────────────
+//   POST /mcp/upload   Authorization: Bearer dk_… (deploy scope)   multipart/form-data:
+//     project  the ZIP file          name       app name or full domain
+//     port     optional              memoryMb   optional
+//     variables  optional JSON object of environment variables (stored encrypted, never returned)
+// Creates the app through the same tRPC procedure as the panel (permissions, fit check, audit), unpacks
+// the ZIP into it and starts the first deploy. JSON-RPC cannot carry a large file, hence this route.
+const BUILD_PREFIX = /^(NEXT_PUBLIC_|VITE_|REACT_APP_|NUXT_PUBLIC_|GATSBY_|EXPO_PUBLIC_|PUBLIC_|VUE_APP_)/;
+const zipUpload = multer({ dest: path.join(os.tmpdir(), "dbbkp-uploads"), limits: { fileSize: 500 * 1024 * 1024, files: 1, fields: 20, fieldSize: 256 * 1024 } });
+
+async function tokenFor(req: Request, res: Response, next: NextFunction) {
+  if (!originOk(req)) return res.status(403).json({ error: "Origin not allowed" });
+  const header = req.headers.authorization ?? "";
+  const auth = await verifyApiToken(header.startsWith("Bearer ") ? header.slice(7).trim() : null, clientIp(req));
+  if (!auth) return res.status(401).json({ error: "Missing, expired or revoked token. Create one on the AI agents page of the Deploy King panel." });
+  if (!scopeAllows(auth.scope, "deploy")) return res.status(403).json({ error: 'Uploading an app needs a "deploy" token.' });
+  if (overLimit(auth.tokenId)) return res.status(429).json({ error: `Too many calls: the limit is ${PER_MINUTE} a minute per token` });
+  (req as any).tokenAuth = auth;
+  next();
+}
+
+router.post("/upload", tokenFor, zipUpload.single("project"), async (req: Request, res: Response) => {
+  const auth: TokenAuth = (req as any).tokenAuth;
+  const file = (req as any).file as { path: string; size: number } | undefined;
+  const ip = clientIp(req);
+  const started = Date.now();
+  const body = req.body ?? {};
+  let siteId: string | null = null;
+  let status = 200;
+  let out: any;
+  try {
+    if (!file) throw new ToolError('Send the ZIP as the "project" field');
+    const name = String(body.name ?? "").trim().toLowerCase();
+    if (!name) throw new ToolError("name is required");
+    let variables: Record<string, unknown> = {};
+    if (body.variables) {
+      try {
+        variables = JSON.parse(String(body.variables));
+      } catch {
+        throw new ToolError("variables must be a JSON object");
+      }
+      if (!variables || typeof variables !== "object" || Array.isArray(variables)) throw new ToolError("variables must be a JSON object");
+    }
+    const num = (v: unknown) => (v === undefined || v === "" ? undefined : Number(v));
+    const caller = appRouter.createCaller({
+      user: { sub: auth.user.sub, sid: `token:${auth.tokenId}`, username: auth.user.username, role: auth.user.role, mustChangePassword: false },
+      ip,
+      apiToken: { id: auth.tokenId, scope: auth.scope },
+    });
+    const site: any = await caller.sites.create({
+      domain: name.includes(".") ? name : `${name}.${BASE_DOMAIN}`,
+      source: "zip",
+      runtime: "auto",
+      port: num(body.port),
+      memoryLimit: num(body.memoryMb),
+      env: Object.entries(variables).map(([key, value]) => ({ key, value: String(value), buildTime: BUILD_PREFIX.test(key) })),
+      volumes: [],
+      autoDeploy: false,
+    } as any);
+    siteId = site.id;
+    await extractProjectZip(file.path, siteDocRoot(site.id));
+    await db.update(sites).set({ status: "provisioning" }).where(eq(sites.id, site.id));
+    const deployment = await enqueueDeploy(site.id, { trigger: "manual", createdBy: auth.user.sub });
+    siteId = null; // keep it
+    out = { id: site.id, name: site.domain, url: appUrl(site.domain), deploymentId: deployment.id, hint: `Deploy started. Call wait_for_deploy with app "${site.domain}".` };
+  } catch (err) {
+    status = err instanceof UnsafeArchiveError || err instanceof ToolError ? 400 : err instanceof TRPCError ? (err.code === "FORBIDDEN" ? 403 : err.code === "CONFLICT" ? 409 : 400) : 500;
+    out = { error: err instanceof UnsafeArchiveError ? err.message : readable(err) };
+  } finally {
+    if (file?.path) await fs.remove(file.path).catch(() => {});
+    // An app that was created but could not be unpacked or queued is taken away again.
+    if (siteId) {
+      await db.delete(sites).where(eq(sites.id, siteId)).catch(() => {});
+      await fs.remove(siteDocRoot(siteId)).catch(() => {});
+    }
+  }
+  db.insert(mcpCalls)
+    .values({
+      tokenId: auth.tokenId, userId: auth.user.sub, tool: "upload_zip",
+      args: { name: body.name, port: body.port, memoryMb: body.memoryMb, bytes: file?.size },
+      ok: status === 200, error: status === 200 ? null : String(out.error).slice(0, 1000), durationMs: Date.now() - started, ip: ip?.slice(0, 64) ?? null,
+    })
+    .catch((e) => console.error("[MCP] activity log failed:", e.message));
+  res.status(status).json(out);
 });
 
 // No server-to-client stream and no sessions in this server.
