@@ -10,6 +10,7 @@
   "dependencies": {
     "@dbbkp/buildplan": "workspace:*",
     "@dbbkp/db": "workspace:*",
+    "@dbbkp/github": "workspace:^",
     "@dbbkp/notify": "workspace:^",
     "@dbbkp/runner": "workspace:*",
     "@dbbkp/security": "workspace:*",
@@ -20,14 +21,12 @@
     "fs-extra": "^11.2.0",
     "get-port": "^5.1.1",
     "ioredis": "^5.3.2",
-    "jsonwebtoken": "^9.0.2",
     "postgres": "^3.4.4",
     "tar": "^6.2.1"
   },
   "devDependencies": {
     "@types/dockerode": "^3.3.29",
     "@types/fs-extra": "^11.0.4",
-    "@types/jsonwebtoken": "^9.0.5",
     "@types/node": "^20.8.0",
     "@types/tar": "^6.1.13",
     "tsx": "^3.12.7",

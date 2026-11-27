@@ -216,9 +216,54 @@ async function main() {
   await hostwatch.ingest(report([{ kind: "user", key: "user:alice", label: "alice", detail: { uid: 1000, login: true }, fp: "a1" }, { kind: "user", key: "user:toor", label: "toor", detail: { uid: 0, login: true }, fp: "t1" }]));
   pass(hooks.length === 1 && hooks[0].body.text.includes("toor") && hooks[0].body.text.includes("same as root"), "a new urgent finding on the server alerts", hooks[0]?.body?.text?.split("\n")[0]);
 
+  // ── the GitHub App: manifest, keys kept encrypted, installations, tokens
+  const gh = await import("@dbbkp/github");
+  const nodeCrypto = await import("node:crypto");
+  const { gitProviders, githubAppInstallations } = await import("@dbbkp/db");
+  const { privateKey, publicKey } = nodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = privateKey.export({ type: "pkcs1", format: "pem" }).toString();
+  const calls: any[] = [];
+  gh.setGithubFetchForTests(async (url: string, init: any = {}) => {
+    calls.push({ url, method: init.method ?? "GET", auth: init.headers?.Authorization ?? null });
+    const json = (body: any) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+    if (url.includes("/app-manifests/good-code/conversions")) return json({ id: 1048577, slug: "deploy-king-prod-1", name: "Deploy King (prod-1)", owner: { login: "acme" }, html_url: "https://github.com/apps/deploy-king-prod-1", client_id: "Iv1.x", client_secret: "cs-secret", webhook_secret: "wh-secret-123", pem });
+    if (url.endsWith("/app/installations?per_page=100&page=1")) return json([{ id: 77, account: { login: "acme-labs", type: "Organization" }, repository_selection: "all" }, { id: 78, account: { login: "lena", type: "User" }, repository_selection: "selected" }]);
+    if (/\/app\/installations\/\d+\/access_tokens$/.test(url)) return json({ token: "ghs_installtoken" + url.match(/installations\/(\d+)/)![1], expires_at: new Date(Date.now() + 3600_000).toISOString() });
+    if (url.includes("/installation/repositories")) return json({ repositories: [{ full_name: "acme-labs/billing", name: "billing", private: true, default_branch: "main", clone_url: "https://github.com/acme-labs/billing.git", pushed_at: "2026-11-01T00:00:00Z" }] });
+    return { ok: false, status: 404, json: async () => ({}), text: async () => '{"message":"Not Found"}' };
+  });
+  const man: any = await owner.git.appManifest({ origin: "https://panel.test.local" });
+  const manifest = JSON.parse(man.manifest);
+  pass(man.postUrl.startsWith("https://github.com/settings/apps/new?state=") && manifest.default_permissions.contents === "read" && !manifest.default_permissions.administration && manifest.default_events.join() === "push,pull_request" && manifest.redirect_url === "https://panel.test.local/settings/github", "the app is asked for read access to code and the push and pull request events only");
+  const state = decodeURIComponent(man.postUrl.split("state=")[1]);
+  pass((await code(devFresh.git.appManifest({ origin: "https://panel.test.local" }))) === "FORBIDDEN", "only admins create the GitHub App");
+  const admin2 = await as((await db.insert(users).values({ email: "a2@test.local", username: "admin2", passwordHash: "x", role: "admin" }).returning())[0]);
+  pass((await code(admin2.git.appComplete({ code: "good-code", state }))) === "BAD_REQUEST", "the code from GitHub only works for the admin who started");
+  const made: any = await owner.git.appComplete({ code: "good-code", state });
+  const storedApp = JSON.stringify((await db.select().from(platformSettings).where(eq(platformSettings.key, "github_app")))[0]);
+  pass(made.installUrl === "https://github.com/apps/deploy-king-prod-1/installations/new" && !storedApp.includes("BEGIN RSA") && !storedApp.includes("wh-secret-123") && !storedApp.includes("cs-secret"), "its private key, webhook secret and client secret are stored encrypted");
+  const jwtParts = gh.appJwt((await gh.getApp())!).split(".");
+  pass(nodeCrypto.createVerify("RSA-SHA256").update(jwtParts[0] + "." + jwtParts[1]).verify(publicKey, Buffer.from(jwtParts[2], "base64url")) && JSON.parse(Buffer.from(jwtParts[1], "base64url").toString()).iss === "1048577", "the app signs its requests with its own key");
+  const synced: any = await owner.git.appSync();
+  const appView: any = await owner.git.app();
+  pass(synced.installations === 2 && appView.installations.length === 2 && appView.installations.find((i: any) => i.account === "acme-labs")?.repositorySelection === "all", "installations are read from GitHub", appView.installations.map((i: any) => i.account).join(","));
+  const provs: any[] = await owner.git.providers();
+  const acme = provs.find((p) => p.login === "acme-labs");
+  pass(acme?.type === "github_app", "each installation is a connection apps can use");
+  const repos: any[] = await owner.git.repos({ providerId: acme.id });
+  pass(repos.length === 1 && repos[0].fullName === "acme-labs/billing" && calls.some((c) => c.url.endsWith("/installation/repositories?per_page=100&page=1") && c.auth === "Bearer ghs_installtoken77"), "repositories are listed with a short-lived installation token");
+  pass((await gh.tokenForProvider((await db.select().from(gitProviders).where(eq(gitProviders.id, acme.id)))[0])) === "ghs_installtoken77", "the worker gets the same kind of token to clone");
+  pass((await gh.appWebhookSecret()) === "wh-secret-123", "the app's webhook secret is used to check push events");
+  pass((await code(owner.git.disconnect({ id: acme.id }))) === "BAD_REQUEST", "an installation is removed on GitHub, not with Disconnect");
+  gh.setGithubFetchForTests(async (url: string) => url.endsWith("/app/installations?per_page=100&page=1") ? { ok: true, status: 200, json: async () => [{ id: 77, account: { login: "acme-labs", type: "Organization" }, repository_selection: "selected" }], text: async () => "" } : { ok: false, status: 500, json: async () => ({}), text: async () => "" });
+  await owner.git.appSync();
+  pass((await db.select().from(githubAppInstallations)).length === 1 && ((await owner.git.app()) as any).installations[0].repositorySelection === "selected", "an installation removed on GitHub goes away here on Refresh");
+  pass((await code(owner.git.appRemove({ confirm: "remove" as const }))) === "OK" && !(await gh.getApp()) && (await db.select().from(githubAppInstallations)).length === 0, "Remove forgets the app and its installations");
+  gh.setGithubFetchForTests(null);
+
   await new Promise((r) => setTimeout(r, 600));
   const kinds = new Set((await db.select({ action: auditLogs.action }).from(auditLogs)).map((a: any) => a.action));
-  const want = ["two_factor_enable", "two_factor_recovery_used", "two_factor_reset", "team_rules", "team_sign_out_everywhere", "team_token_revoke", "email_settings", "email_test", "alert_settings", "alert_test"];
+  const want = ["two_factor_enable", "two_factor_recovery_used", "two_factor_reset", "team_rules", "team_sign_out_everywhere", "team_token_revoke", "email_settings", "email_test", "alert_settings", "alert_test", "github_app_create", "github_app_install", "github_app_remove"];
   pass(want.every((k) => kinds.has(k)), "every change is in the audit log", want.filter((k) => !kinds.has(k)).join(",") || "all there");
 
   notify.setTransportForTests(null);

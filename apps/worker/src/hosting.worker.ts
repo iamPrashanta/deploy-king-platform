@@ -15,6 +15,7 @@ import { createBuildPlan, GENERATED_DOCKERFILE, gitAuthArgs, redactToken, resolv
 import { PassThrough } from "node:stream";
 import { fireDeployEvent } from "./automation.worker";
 import { alertDeployFailed } from "@dbbkp/notify";
+import { tokenForProvider } from "@dbbkp/github";
 import net from "node:net";
 
 /**
@@ -182,7 +183,8 @@ async function providerToken(site: Site): Promise<string | null> {
   if (!site.gitProviderId) return null;
   const [p] = await db.select().from(gitProviders).where(eq(gitProviders.id, site.gitProviderId)).limit(1);
   if (!p) return null;
-  return decrypt({ encryptedValue: p.encryptedToken, iv: p.iv, authTag: p.authTag });
+  // A GitHub App installation gets a fresh token (valid an hour); a personal token is stored encrypted.
+  return tokenForProvider(p);
 }
 
 /** Named volumes survive redeploys; they are labelled so delete can find them. */

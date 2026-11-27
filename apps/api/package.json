@@ -11,6 +11,7 @@
     "@dbbkp/audit": "workspace:*",
     "@dbbkp/buildplan": "workspace:*",
     "@dbbkp/db": "workspace:*",
+    "@dbbkp/github": "workspace:^",
     "@dbbkp/notify": "workspace:^",
     "@dbbkp/runner": "workspace:*",
     "@dbbkp/security": "workspace:*",
