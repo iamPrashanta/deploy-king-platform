@@ -959,7 +959,6 @@ export type Entity = typeof entities.$inferSelect;
 export type EntityRelation = typeof entityRelations.$inferSelect;
 export type Workflow = typeof workflows.$inferSelect;
 export type WorkflowStep = typeof workflowSteps.$inferSelect;
-
 // ─── SERVERS & SSH (servers agent) ───────────────────────────────────────────
 // Other servers this panel signs in to over SSH. Admins only. Private keys and stored passwords are
 // encrypted with MASTER_KEY (AES-256-GCM, @dbbkp/security) and never leave the API.
@@ -1065,11 +1064,14 @@ export type SshServer = typeof sshServers.$inferSelect;
 export type SshSession = typeof sshSessions.$inferSelect;
 // ─── SECURITY AGENT: 2-step sign-in, sign-in devices, alerts, GitHub App ─────
 // (added by the "security" agent; new tables only)
+
 // 2-step sign-in (TOTP) of one user. enabledAt null = set up was started and not confirmed yet.
 export const userTwoFactor = pgTable("user_two_factor", {
   userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   /** The shared secret (base32), encrypted with MASTER_KEY. */
   secretEnc: text("secret_enc").notNull(),
+  iv: varchar("iv", { length: 64 }).notNull(),
+  authTag: varchar("auth_tag", { length: 64 }).notNull(),
   enabledAt: timestamp("enabled_at"),
   /** SHA-256 of each unused recovery code. A code is removed when it is used. */
   recoveryHashes: jsonb("recovery_hashes").$type<string[]>().notNull().default([]),
@@ -1080,15 +1082,19 @@ export const userTwoFactor = pgTable("user_two_factor", {
   lockedUntil: timestamp("locked_until"),
   resetBy: uuid("reset_by"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Where a session was signed in from, for "Signed in on" on a member's page.
 export const sessionDevices = pgTable("session_devices", {
   sessionId: uuid("session_id").primaryKey().references(() => sessions.id, { onDelete: "cascade" }),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  ip: varchar("ip", { length: 64 }),
   userAgent: varchar("user_agent", { length: 500 }),
   /** password | 2-step | recovery code | invitation */
   method: varchar("method", { length: 20 }),
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => ({ byUser: index("session_devices_user_idx").on(t.userId) }));
+
 // One row per thing an alert was sent about. Used to send no more than one alert per item per hour.
 export const alertState = pgTable("alert_state", {
   kind: varchar("kind", { length: 20 }).notNull(), // job_failed | worker_crash | deploy_failed | host_urgent | test
@@ -1100,6 +1106,7 @@ export const alertState = pgTable("alert_state", {
   /** What happened on each channel the last time, e.g. { email: "sent", webhook: "HTTP 404" }. */
   result: jsonb("result").$type<Record<string, string>>().notNull().default({}),
 }, (t) => ({ pk: primaryKey({ columns: [t.kind, t.itemKey] }), bySent: index("alert_state_sent_idx").on(t.lastSentAt) }));
+
 // An installation of this panel's GitHub App on one account or organization. Its git_providers row
 // (type "github_app") is what apps point at; tokens are made from the App's key when they are needed.
 export const githubAppInstallations = pgTable("github_app_installations", {
@@ -1112,20 +1119,30 @@ export const githubAppInstallations = pgTable("github_app_installations", {
   suspendedAt: timestamp("suspended_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export type UserTwoFactor = typeof userTwoFactor.$inferSelect;
 export type AlertState = typeof alertState.$inferSelect;
 export type GithubAppInstallation = typeof githubAppInstallations.$inferSelect;
 // ─── DATA (agent: data) ──────────────────────────────────────────────────────
 // Databases, backups, schedules, destinations and restores (panel section 6: Data).
+
 // A PostgreSQL database Deploy King did not create, connected by URL ("Connect existing").
 // The URL is encrypted with MASTER_KEY; the panel only ever shows it with the password hidden.
 export const dbConnections = pgTable("db_connections", {
   dbInstanceId: uuid("db_instance_id").primaryKey().references(() => dbInstances.id, { onDelete: "cascade" }),
+  host: varchar("host", { length: 255 }).notNull(),
   port: integer("port").notNull().default(5432),
   database: varchar("database", { length: 100 }).notNull(),
   encryptedUrl: text("encrypted_url").notNull(),
+  iv: varchar("iv", { length: 64 }).notNull(),
+  authTag: varchar("auth_tag", { length: 64 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Where backup files are copied. "This server" (kind local) is made by Deploy King and cannot be removed.
 export const backupDestinations = pgTable("backup_destinations", {
+  id: uuid("id").defaultRandom().primaryKey(),
   name: varchar("name", { length: 100 }).notNull(),
   // local (a folder on this server) | rclone (any rclone remote: S3, Google Drive, SFTP, ...)
   kind: varchar("kind", { length: 20 }).notNull(),
@@ -1134,10 +1151,16 @@ export const backupDestinations = pgTable("backup_destinations", {
   /** Keep only this many backups of each database or volume here. null: follow each schedule's "keep". */
   keepLast: integer("keep_last"),
   builtIn: boolean("built_in").notNull().default(false),
+  lastCheckAt: timestamp("last_check_at"),
   lastCheckOk: boolean("last_check_ok"),
   lastCheckMessage: text("last_check_message"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // The backup schedule of one database or one app volume. target_key: "db:<id>" or "vol:<siteId>:<volume>".
 export const backupPolicies = pgTable("backup_policies", {
+  id: uuid("id").defaultRandom().primaryKey(),
   targetKey: varchar("target_key", { length: 200 }).notNull().unique(),
   targetType: varchar("target_type", { length: 12 }).notNull(), // database | volume
   dbInstanceId: uuid("db_instance_id").references(() => dbInstances.id, { onDelete: "cascade" }),
@@ -1148,6 +1171,11 @@ export const backupPolicies = pgTable("backup_policies", {
   keep: integer("keep").notNull().default(7),
   destinationIds: jsonb("destination_ids").$type<string[]>().notNull().default([]),
   enabled: boolean("enabled").notNull().default(true),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export type BackupCopy = {
   destinationId: string;
   name: string;
@@ -1160,8 +1188,11 @@ export type BackupCopy = {
   error?: string;
   /** Removed by a "keep" rule. */
   removedAt?: string;
+};
+
 // One backup run: a database dump or a volume archive, its checksum and where it was copied.
 export const backups = pgTable("backups", {
+  id: uuid("id").defaultRandom().primaryKey(),
   targetKey: varchar("target_key", { length: 200 }).notNull(),
   targetType: varchar("target_type", { length: 12 }).notNull(), // database | volume
   dbInstanceId: uuid("db_instance_id").references(() => dbInstances.id, { onDelete: "set null" }),
@@ -1181,12 +1212,17 @@ export const backups = pgTable("backups", {
   error: text("error"),
   copies: jsonb("copies").$type<BackupCopy[]>().notNull().default([]),
   policyId: uuid("policy_id").references(() => backupPolicies.id, { onDelete: "set null" }),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow(),
   startedAt: timestamp("started_at"),
   finishedAt: timestamp("finished_at"),
 }, (t) => ({ byTarget: index("backups_target_idx").on(t.targetKey, t.createdAt) }));
+
 export type RestoreStep = { at: string; text: string; ok?: boolean };
+
 // One restore: which backup, how, into what, and what happened step by step.
 export const backupRestores = pgTable("backup_restores", {
+  id: uuid("id").defaultRandom().primaryKey(),
   backupId: uuid("backup_id").notNull().references(() => backups.id, { onDelete: "cascade" }),
   targetKey: varchar("target_key", { length: 200 }).notNull(),
   targetName: varchar("target_name", { length: 255 }).notNull(),
@@ -1202,7 +1238,11 @@ export const backupRestores = pgTable("backup_restores", {
   steps: jsonb("steps").$type<RestoreStep[]>().notNull().default([]),
   error: text("error"),
   resultDbInstanceId: uuid("result_db_instance_id"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow(),
   finishedAt: timestamp("finished_at"),
+});
+
 export type DbInstance = typeof dbInstances.$inferSelect;
 export type DbConnection = typeof dbConnections.$inferSelect;
 export type BackupDestination = typeof backupDestinations.$inferSelect;
