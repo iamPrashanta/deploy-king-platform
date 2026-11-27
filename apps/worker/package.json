@@ -10,6 +10,8 @@
   "dependencies": {
     "@dbbkp/buildplan": "workspace:*",
     "@dbbkp/db": "workspace:*",
+    "@dbbkp/github": "workspace:^",
+    "@dbbkp/notify": "workspace:^",
     "@dbbkp/runner": "workspace:*",
     "@dbbkp/security": "workspace:*",
     "bullmq": "^4.12.0",
@@ -23,11 +25,11 @@
     "tar": "^6.2.1"
   },
   "devDependencies": {
-    "typescript": "^5.2.2",
-    "tsx": "^3.12.7",
-    "@types/node": "^20.8.0",
+    "@types/dockerode": "^3.3.29",
     "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.8.0",
     "@types/tar": "^6.1.13",
-    "@types/dockerode": "^3.3.29"
+    "tsx": "^3.12.7",
+    "typescript": "^5.2.2"
   }
 }

@@ -16,6 +16,8 @@ export type Context = {
     mustChangePassword: boolean;
   } | null;
   ip: string | null;
+  /** The browser or client, for the list of devices a member is signed in on. */
+  userAgent?: string | null;
   /** Set when the call comes from an AI agent's token through /mcp (there is no browser session). */
   apiToken?: { id: string; scope: string } | null;
 };
@@ -23,9 +25,10 @@ export type Context = {
 export function createContext({ req }: { req: any }): Context {
   const ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress || null;
   const header = req.headers?.authorization as string | undefined;
+  const userAgent = typeof req.headers?.["user-agent"] === "string" ? (req.headers["user-agent"] as string).slice(0, 500) : null;
 
   if (!header?.startsWith("Bearer ")) {
-    return { user: null, ip };
+    return { user: null, ip, userAgent };
   }
 
   try {
@@ -41,9 +44,10 @@ export function createContext({ req }: { req: any }): Context {
         mustChangePassword: !!payload.mcp,
       },
       ip,
+      userAgent,
     };
   } catch {
-    return { user: null, ip };
+    return { user: null, ip, userAgent };
   }
 }
 

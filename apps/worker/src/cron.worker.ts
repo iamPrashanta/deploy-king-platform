@@ -5,6 +5,7 @@ import { connection } from "./connection";
 import { db, cronJobs, cronRuns, sites, siteEnvVars, type CronJob, type Site } from "@dbbkp/db";
 import { and, eq, lt, sql } from "drizzle-orm";
 import { decrypt } from "@dbbkp/security";
+import { alertJobFailed } from "@dbbkp/notify";
 
 /**
  * Runs scheduled jobs inside the app: the web container, or one of its workers.
@@ -82,10 +83,15 @@ async function finish(job: CronJob, runId: string, startedAt: Date, status: "ok"
   const durationMs = finishedAt.getTime() - startedAt.getTime();
   await db.update(cronRuns).set({ status, exitCode, output, finishedAt, durationMs, ...(container ? { container } : {}) }).where(eq(cronRuns.id, runId));
   if (status !== "skipped") {
-    await db
+    const [after] = await db
       .update(cronJobs)
       .set({ lastRunAt: startedAt, lastStatus: status, lastExitCode: exitCode, lastDurationMs: durationMs, failStreak: status === "ok" ? 0 : sql`${cronJobs.failStreak} + 1` })
-      .where(eq(cronJobs.id, job.id));
+      .where(eq(cronJobs.id, job.id))
+      .returning({ failStreak: cronJobs.failStreak });
+    if (status !== "ok" && after) {
+      const [site] = await db.select({ domain: sites.domain }).from(sites).where(eq(sites.id, job.siteId)).limit(1);
+      await alertJobFailed(job, { domain: site?.domain ?? "an app" }, after.failStreak, status);
+    }
   }
   await db.delete(cronRuns).where(and(eq(cronRuns.jobId, job.id), lt(cronRuns.startedAt, new Date(Date.now() - KEEP_DAYS * 86_400_000))));
   return { status, exitCode, durationMs };

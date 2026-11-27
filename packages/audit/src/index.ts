@@ -65,7 +65,23 @@ export type AuditAction =
   | "ssh_terminal_open"
   | "ssh_terminal_close"
   | "ssh_terminal_denied"
-  | "ssh_settings";
+  | "ssh_settings"
+  // security agent: 2-step sign-in, sessions, email, alerts, GitHub App
+  | "two_factor_enable"
+  | "two_factor_disable"
+  | "two_factor_reset"
+  | "two_factor_recovery_used"
+  | "two_factor_recovery_new"
+  | "team_rules"
+  | "team_sign_out_everywhere"
+  | "team_token_revoke"
+  | "email_settings"
+  | "email_test"
+  | "alert_settings"
+  | "alert_test"
+  | "github_app_create"
+  | "github_app_install"
+  | "github_app_remove";
 
 export interface AuditContext {
   /** UUID of the user performing the action */

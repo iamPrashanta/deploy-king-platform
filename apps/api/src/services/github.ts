@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { db, gitProviders } from "@dbbkp/db";
+import { db, gitProviders, githubAppInstallations } from "@dbbkp/db";
 import { and, eq } from "drizzle-orm";
-import { decrypt } from "@dbbkp/security";
+import { installationRepos, tokenForProvider, GithubError } from "@dbbkp/github";
 import type { AuthedUser } from "../middleware/requireAuth";
 
 const GH = "https://api.github.com";
@@ -72,6 +72,35 @@ export async function providerWithToken(user: AuthedUser | { sub: string; role: 
       : and(eq(gitProviders.id, providerId), eq(gitProviders.userId, user.sub));
   const [p] = await db.select().from(gitProviders).where(where).limit(1);
   if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Git provider not found" });
-  const token = decrypt({ encryptedValue: p.encryptedToken, iv: p.iv, authTag: p.authTag });
-  return { provider: p, token };
+  try {
+    // A personal token is stored; a GitHub App installation gets a fresh token that lasts an hour.
+    return { provider: p, token: await tokenForProvider(p) };
+  } catch (e: any) {
+    if (e instanceof GithubError) throw new TRPCError({ code: e.status === 404 ? "NOT_FOUND" : "BAD_REQUEST", message: e.message });
+    throw e;
+  }
+}
+
+const asRepo = (r: any): GithubRepo => ({
+  fullName: r.full_name,
+  name: r.name,
+  private: !!r.private,
+  defaultBranch: r.default_branch || "main",
+  cloneUrl: r.clone_url,
+  description: r.description ?? null,
+  language: r.language ?? null,
+  pushedAt: r.pushed_at ?? null,
+});
+
+/** Repositories of one connection: everything a personal token can see, or what an App installation was given. */
+export async function providerRepos(provider: { id: string; type: string }, token: string): Promise<GithubRepo[]> {
+  if (provider.type !== "github_app") return githubRepos(token);
+  const [inst] = await db.select().from(githubAppInstallations).where(eq(githubAppInstallations.providerId, provider.id)).limit(1);
+  if (!inst) throw new TRPCError({ code: "NOT_FOUND", message: "This installation was removed on GitHub." });
+  try {
+    return (await installationRepos(inst.installationId)).map(asRepo).sort((a, b) => String(b.pushedAt).localeCompare(String(a.pushedAt)));
+  } catch (e: any) {
+    if (e instanceof GithubError) throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
+    throw e;
+  }
 }

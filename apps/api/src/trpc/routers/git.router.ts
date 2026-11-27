@@ -4,17 +4,25 @@ import os from "node:os";
 import path from "node:path";
 import execa from "execa";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure } from "../trpc";
-import { db, gitProviders } from "@dbbkp/db";
+import { router, protectedProcedure, adminProcedure, type Context } from "../trpc";
+import { db, gitProviders, githubAppInstallations } from "@dbbkp/db";
+import { logAudit } from "@dbbkp/audit";
+import * as ghApp from "@dbbkp/github";
+import { JWT_SECRET, PUBLIC_API_URL } from "../../config";
 import { desc, eq } from "drizzle-orm";
 import { encrypt } from "@dbbkp/security";
 import { analyzeProject, appFolders, gitAuthArgs, normalizeRootDirectory, redactToken, resolveBuildRoot, slugify } from "@dbbkp/buildplan";
-import { githubRepos, githubUser, providerWithToken } from "../../services/github";
+import { githubUser, providerRepos, providerWithToken } from "../../services/github";
 import { isValidBranch, isValidRepoUrl } from "../../services/validation";
 
 async function tokenFor(ctx: any, providerId?: string | null) {
   if (!providerId) return null;
   return (await providerWithToken(ctx.user, providerId)).token;
+}
+
+/** The GitHub App holds keys for every repository it can see: only people in the panel may manage it, never agent tokens. */
+function panelOnly(ctx: Context) {
+  if (ctx.apiToken) throw new TRPCError({ code: "FORBIDDEN", message: "The GitHub App can only be managed in the panel." });
 }
 
 export const gitRouter = router({
@@ -57,14 +65,95 @@ export const gitRouter = router({
     }),
 
   disconnect: protectedProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
-    const { provider } = await providerWithToken(ctx.user!, input.id);
+    const [provider] = await db.select().from(gitProviders).where(eq(gitProviders.id, input.id)).limit(1);
+    if (!provider || (ctx.user!.role !== "admin" && provider.userId !== ctx.user!.sub)) throw new TRPCError({ code: "NOT_FOUND", message: "Git provider not found" });
+    if (provider.type === "github_app") throw new TRPCError({ code: "BAD_REQUEST", message: "This is a GitHub App installation. Uninstall it on GitHub, then press Refresh on the Connect GitHub page." });
     await db.delete(gitProviders).where(eq(gitProviders.id, provider.id));
     return { success: true };
   }),
 
   repos: protectedProcedure.input(z.object({ providerId: z.string().uuid() })).query(async ({ ctx, input }) => {
-    const { token } = await providerWithToken(ctx.user!, input.providerId);
-    return githubRepos(token);
+    const { provider, token } = await providerWithToken(ctx.user!, input.providerId);
+    return providerRepos(provider, token);
+  }),
+
+  // ── The GitHub App (Settings › GitHub › Connect GitHub) ────────────────────
+
+  /** The app, if it was created, and where it is installed. */
+  app: adminProcedure.query(async ({ ctx }) => {
+    panelOnly(ctx);
+    const app = await ghApp.getApp();
+    const installs = await db.select().from(githubAppInstallations).orderBy(desc(githubAppInstallations.createdAt));
+    return {
+      app: app ? { appId: app.appId, slug: app.slug, name: app.name, owner: app.owner, htmlUrl: app.htmlUrl, createdAt: app.createdAt } : null,
+      installUrl: app ? `https://github.com/apps/${app.slug}/installations/new` : null,
+      installations: installs.map((i) => ({ installationId: i.installationId, providerId: i.providerId, account: i.account, accountType: i.accountType, repositorySelection: i.repositorySelection, suspended: !!i.suspendedAt, settingsUrl: i.accountType === "Organization" ? `https://github.com/organizations/${i.account}/settings/installations/${i.installationId}` : `https://github.com/settings/installations/${i.installationId}` })),
+      webhookFromEnv: !!process.env.GITHUB_WEBHOOK_SECRET,
+    };
+  }),
+
+  /** Step 1: what the panel posts to GitHub to create the app. `origin` is the panel's address as the browser sees it. */
+  appManifest: adminProcedure
+    .input(z.object({ origin: z.string().trim().max(300).regex(/^https?:\/\/[^\s/]+$/i, "The panel's address, such as https://panel.example.com"), organization: z.string().trim().regex(/^[A-Za-z0-9-]{1,39}$/).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      panelOnly(ctx);
+      if (await ghApp.getApp()) throw new TRPCError({ code: "CONFLICT", message: "The GitHub App is already created. Remove it first to make a new one." });
+      const host = new URL(input.origin).hostname;
+      const webhookUrl = `${PUBLIC_API_URL || input.origin}/webhooks/github`;
+      const manifest = ghApp.appManifest({ name: `Deploy King (${host})`, panelUrl: input.origin, webhookUrl });
+      const state = ghApp.signState(ctx.user!.sub, JWT_SECRET);
+      const base = input.organization ? `https://github.com/organizations/${input.organization}/settings/apps/new` : "https://github.com/settings/apps/new";
+      return { postUrl: `${base}?state=${encodeURIComponent(state)}`, manifest: JSON.stringify(manifest), webhookUrl, public: !/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) };
+    }),
+
+  /** GitHub sent the admin back with a one-time code: keep the app's keys, encrypted. */
+  appComplete: adminProcedure.input(z.object({ code: z.string().trim().min(1).max(100), state: z.string().trim().min(10).max(500) })).mutation(async ({ ctx, input }) => {
+    panelOnly(ctx);
+    if (!ghApp.checkState(input.state, ctx.user!.sub, JWT_SECRET)) throw new TRPCError({ code: "BAD_REQUEST", message: "This link from GitHub has expired or was started by someone else. Start again." });
+    if (await ghApp.getApp()) throw new TRPCError({ code: "CONFLICT", message: "The GitHub App is already created." });
+    try {
+      const app = await ghApp.completeManifest(input.code, ctx.user!.sub);
+      logAudit("github_app_create", { actorId: ctx.user!.sub, targetType: "github_app", targetName: app.slug, metadata: { appId: app.appId, owner: app.owner }, ip: ctx.ip ?? undefined });
+      return { name: app.name, slug: app.slug, installUrl: `https://github.com/apps/${app.slug}/installations/new` };
+    } catch (e: any) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "GitHub did not create the app" });
+    }
+  }),
+
+  /** After installing (GitHub sends the admin back with installation_id), or by hand with Refresh. */
+  appSync: adminProcedure.mutation(async ({ ctx }) => {
+    panelOnly(ctx);
+    if (!(await ghApp.getApp())) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Create the GitHub App first." });
+    try {
+      const out = await ghApp.syncInstallations(ctx.user!.sub);
+      logAudit("github_app_install", { actorId: ctx.user!.sub, targetType: "github_app", metadata: out, ip: ctx.ip ?? undefined });
+      return out;
+    } catch (e: any) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Could not read the installations from GitHub" });
+    }
+  }),
+
+  /** Repositories one installation can see, for the Connect GitHub page. */
+  appRepos: adminProcedure.input(z.object({ installationId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+    panelOnly(ctx);
+    const [inst] = await db.select().from(githubAppInstallations).where(eq(githubAppInstallations.installationId, input.installationId)).limit(1);
+    if (!inst) throw new TRPCError({ code: "NOT_FOUND", message: "Installation not found" });
+    try {
+      const repos = await ghApp.installationRepos(inst.installationId);
+      return repos.map((r: any) => ({ fullName: String(r.full_name), name: String(r.name), private: !!r.private }));
+    } catch (e: any) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "GitHub did not answer" });
+    }
+  }),
+
+  /** Forget the app here. Delete it on GitHub too (its page has the button). */
+  appRemove: adminProcedure.input(z.object({ confirm: z.literal("remove") })).mutation(async ({ ctx }) => {
+    panelOnly(ctx);
+    const app = await ghApp.getApp();
+    if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "There is no GitHub App to remove." });
+    const out = await ghApp.removeApp();
+    logAudit("github_app_remove", { actorId: ctx.user!.sub, targetType: "github_app", targetName: app.slug, metadata: out, ip: ctx.ip ?? undefined });
+    return { ...out, htmlUrl: app.htmlUrl };
   }),
 
   /** Branches of any git URL (works for public repos without a provider). */

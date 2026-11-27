@@ -7,6 +7,7 @@ import { enqueueDeploy } from "../services/deploy";
 import { DEFAULT_APP_MEMORY_MB, capacity, evaluateFit } from "../services/capacity";
 import { enqueuePipelineRun } from "../services/pipelines";
 import { normalizeRepoUrl, isValidBranch, siteDocRoot } from "../services/validation";
+import { appWebhookSecret, syncInstallations, getApp } from "@dbbkp/github";
 
 const router = Router();
 
@@ -28,7 +29,9 @@ router.post("/github", async (req, res) => {
   try {
     const signature = req.headers["x-hub-signature-256"];
     const event = req.headers["x-github-event"];
-    const secret = process.env.GITHUB_WEBHOOK_SECRET;
+    // The secret set by hand for per-repository webhooks, and the GitHub App's own (Settings › GitHub).
+    const secrets = [process.env.GITHUB_WEBHOOK_SECRET, await appWebhookSecret().catch(() => null)].filter((x): x is string => !!x);
+    const secret = secrets[0];
 
     if (typeof event !== "string") {
       res.status(400).json({ error: "Missing x-github-event header" });
@@ -46,7 +49,7 @@ router.post("/github", async (req, res) => {
       console.warn("[Webhook] ALLOW_UNSIGNED_WEBHOOKS=true - accepting an unsigned webhook (development only).");
     } else {
       const rawBody: Buffer | undefined = (req as any).rawBody;
-      if (typeof signature !== "string" || !rawBody || !verifyGitHubSignature(rawBody, signature, secret)) {
+      if (typeof signature !== "string" || !rawBody || !secrets.some((sec) => verifyGitHubSignature(rawBody, signature, sec))) {
         res.status(401).json({ error: "Invalid signature" });
         return;
       }
@@ -54,6 +57,14 @@ router.post("/github", async (req, res) => {
 
     if (event === "ping") {
       res.json({ ok: true, pong: true });
+      return;
+    }
+
+    // The GitHub App was installed, changed or removed somewhere: bring the list in step.
+    if (event === "installation" || event === "installation_repositories") {
+      const app = await getApp().catch(() => null);
+      if (app?.createdBy) await syncInstallations(app.createdBy).catch((e) => console.error("[Webhook] installation sync:", e?.message ?? e));
+      res.json({ ok: true, synced: !!app });
       return;
     }
 

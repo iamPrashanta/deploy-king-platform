@@ -2,8 +2,10 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, gt, inArray, isNull, max, ne, sql } from "drizzle-orm";
-import { db, accessRequests, invitations, sessions, siteAccess, sites, users } from "@dbbkp/db";
+import { db, accessRequests, apiTokens, auditLogs, invitations, sessionDevices, sessions, siteAccess, sites, users } from "@dbbkp/db";
 import { logAudit } from "@dbbkp/audit";
+import { getEmailSettings, isConfigured, panelUrl, renderInviteEmail, sendMail } from "@dbbkp/notify";
+import * as twoStep from "../../services/twofactor";
 import { router, adminProcedure, protectedProcedure, publicProcedure, type Context } from "../trpc";
 import { TEAM_ROLES, cleanGrants, hashInviteToken, issueSession, manageProblem, memberPermissions, newInviteToken, ownerId, type MemberGrants, type TeamRole } from "../../services/team";
 
@@ -46,6 +48,71 @@ function inviteState(i: { acceptedAt: Date | null; revokedAt: Date | null; expir
   return i.expiresAt < new Date() ? ("expired" as const) : ("waiting" as const);
 }
 
+type InviteLink = { email: string; path: string; expiresAt: Date; emailed: boolean; emailError?: string };
+
+/**
+ * Emails an invitation when an SMTP server is set up. The link is returned either way, so "Copy link" keeps working;
+ * a failed email never undoes the invitation.
+ */
+async function emailInvite(inv: { email: string; role: string; allApps: boolean; siteIds: string[]; note: string | null; expiresAt: Date }, path: string, inviterId: string, origin?: string | null): Promise<Pick<InviteLink, "emailed" | "emailError">> {
+  const settings = await getEmailSettings();
+  if (!isConfigured(settings)) return { emailed: false };
+  const base = (await panelUrl()) || (origin ?? "");
+  if (!base) return { emailed: false, emailError: "The panel address is not set in Settings › Email, so the email would have no working link." };
+  const [inviter] = await db.select({ username: users.username, email: users.email }).from(users).where(eq(users.id, inviterId)).limit(1);
+  const apps = inv.allApps || !inv.siteIds.length ? [] : (await db.select({ domain: sites.domain }).from(sites).where(inArray(sites.id, inv.siteIds))).map((a) => a.domain);
+  const mail = renderInviteEmail({ inviter: inviter?.username ?? "An admin", inviterEmail: inviter?.email, teamName: settings.teamName, email: inv.email, role: inv.role, allApps: inv.allApps, apps, note: inv.note, url: base + path, expiresAt: inv.expiresAt });
+  try {
+    await sendMail({ to: inv.email, ...mail, replyTo: inviter?.email }, settings);
+    return { emailed: true };
+  } catch (e: any) {
+    return { emailed: false, emailError: String(e?.response || e?.message || e).replace(/\s+/g, " ").slice(0, 200) };
+  }
+}
+
+/** Sign-in details, devices, agent tokens and recent activity of one member, for their access page. */
+async function memberDetails(u: { id: string; invitedBy: string | null; createdAt: Date | null }, viewerId: string) {
+  const now = new Date();
+  const [tf, devices, tokens, activity, inviter, seen] = await Promise.all([
+    twoStep.status(u.id),
+    db
+      .select({ id: sessions.id, createdAt: sessions.createdAt, lastActivityAt: sessions.lastActivityAt, expiresAt: sessions.expiresAt, ip: sessionDevices.ip, userAgent: sessionDevices.userAgent, method: sessionDevices.method })
+      .from(sessions)
+      .leftJoin(sessionDevices, eq(sessionDevices.sessionId, sessions.id))
+      .where(and(eq(sessions.userId, u.id), gt(sessions.expiresAt, now)))
+      .orderBy(desc(sessions.lastActivityAt))
+      .limit(20),
+    db
+      .select({ id: apiTokens.id, name: apiTokens.name, scope: apiTokens.scope, prefix: apiTokens.prefix, expiresAt: apiTokens.expiresAt, lastUsedAt: apiTokens.lastUsedAt, createdAt: apiTokens.createdAt })
+      .from(apiTokens)
+      .where(and(eq(apiTokens.userId, u.id), isNull(apiTokens.revokedAt)))
+      .orderBy(desc(apiTokens.createdAt)),
+    db
+      .select({ id: auditLogs.id, action: auditLogs.action, targetName: auditLogs.targetName, targetType: auditLogs.targetType, metadata: auditLogs.metadata, createdAt: auditLogs.createdAt })
+      .from(auditLogs)
+      .where(eq(auditLogs.actorId, u.id))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(8),
+    u.invitedBy ? db.select({ id: users.id, username: users.username }).from(users).where(eq(users.id, u.invitedBy)).limit(1) : Promise.resolve([]),
+    db.select({ at: max(sessions.lastActivityAt) }).from(sessions).where(eq(sessions.userId, u.id)),
+  ]);
+  const by = (inviter as Array<{ id: string; username: string }>)[0];
+  return {
+    twoFactor: tf.enabled,
+    twoFactorSince: tf.enabledAt,
+    recoveryLeft: tf.recoveryLeft,
+    lastActiveAt: seen[0]?.at ?? null,
+    joinedAt: u.createdAt,
+    invitedBy: by ? (by.id === viewerId ? "you" : by.username) : null,
+    devices: devices.map((d) => ({ ...d, expiresAt: d.expiresAt })),
+    tokens: tokens.filter((t) => !t.expiresAt || t.expiresAt > now),
+    activity,
+  };
+}
+
+/** The browser's own address, used for invitation links only when no panel address is saved. */
+const originInput = z.string().trim().max(300).regex(/^https?:\/\/[^\s/]+$/i).optional();
+
 export const teamRouter = router({
   /** What the signed-in person is, for showing or hiding parts of the panel. The server still checks every action. */
   me: protectedProcedure.query(async ({ ctx }) => {
@@ -66,6 +133,7 @@ export const teamRouter = router({
     const shared = await db.select({ userId: siteAccess.userId, n: count() }).from(siteAccess).groupBy(siteAccess.userId);
     const own = await db.select({ userId: sites.userId, n: count() }).from(sites).groupBy(sites.userId);
     const seen = await db.select({ userId: sessions.userId, at: max(sessions.lastActivityAt) }).from(sessions).groupBy(sessions.userId);
+    const twoStepOn = await twoStep.enabledUserIds();
     const sharedBy = new Map(shared.map((r) => [r.userId, Number(r.n)]));
     const ownBy = new Map(own.map((r) => [r.userId, Number(r.n)]));
     const seenBy = new Map(seen.map((r) => [r.userId, r.at]));
@@ -79,6 +147,7 @@ export const teamRouter = router({
       ownApps: ownBy.get(u.id) ?? 0,
       grants: u.grants ?? {},
       suspended: !!u.suspendedAt,
+      twoFactor: twoStepOn.has(u.id),
       lastActiveAt: seenBy.get(u.id) ?? null,
       joinedAt: u.createdAt,
       you: u.id === ctx.user!.sub,
@@ -101,7 +170,67 @@ export const teamRouter = router({
       siteIds: shared.map((s) => s.siteId),
       grants: (u.grants ?? {}) as MemberGrants,
       suspended: !!u.suspendedAt,
+      ...(await memberDetails(u, ctx.user!.sub)),
     };
+  }),
+
+  /** Team rules: today, whether everyone must use 2-step sign-in. */
+  rules: adminProcedure.query(async ({ ctx }) => {
+    panelOnly(ctx);
+    const [rules, on, total] = await Promise.all([twoStep.teamRules(), twoStep.enabledUserIds(), db.select({ id: users.id }).from(users)]);
+    return { ...rules, twoFactorCount: total.filter((u) => on.has(u.id)).length, memberCount: total.length };
+  }),
+
+  /** Members without 2-step sign-in are asked to set it up at their next sign-in. Only the owner and admins. */
+  setRules: adminProcedure.input(z.object({ requireTwoFactor: z.boolean() })).mutation(async ({ ctx, input }) => {
+    panelOnly(ctx);
+    const before = await twoStep.teamRules();
+    const after = await twoStep.saveTeamRules({ requireTwoFactor: input.requireTwoFactor === true }, ctx.user!.sub);
+    logAudit("team_rules", { actorId: ctx.user!.sub, targetType: "settings", targetName: "team_rules", metadata: { before, after }, ip: ctx.ip ?? undefined });
+    return after;
+  }),
+
+  /** For a member who lost their phone: their 2-step sign-in is removed. They set it up again (at once, if the team requires it). */
+  resetTwoFactor: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    panelOnly(ctx);
+    const actor = await actorOf(ctx);
+    const [target] = await db.select().from(users).where(eq(users.id, input.id)).limit(1);
+    if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+    const problem = manageProblem(actor, { id: target.id, isOwner: target.id === actor.owner, isAdmin: target.role === "admin" });
+    if (problem) throw new TRPCError({ code: "FORBIDDEN", message: problem });
+    const had = await twoStep.remove(target.id);
+    if (!had) throw new TRPCError({ code: "BAD_REQUEST", message: `${target.username} has not set up 2-step sign-in.` });
+    // Whoever has their phone should not stay signed in either.
+    await db.delete(sessions).where(eq(sessions.userId, target.id));
+    logAudit("two_factor_reset", { actorId: actor.id, targetId: target.id, targetType: "user", targetName: target.username, ip: ctx.ip ?? undefined });
+    return { success: true };
+  }),
+
+  /** Ends every session of a member. Their agent tokens keep working; revoke those separately. */
+  signOutEverywhere: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    panelOnly(ctx);
+    const actor = await actorOf(ctx);
+    const [target] = await db.select().from(users).where(eq(users.id, input.id)).limit(1);
+    if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+    const problem = manageProblem(actor, { id: target.id, isOwner: target.id === actor.owner, isAdmin: target.role === "admin" });
+    if (problem) throw new TRPCError({ code: "FORBIDDEN", message: problem });
+    const ended = await db.delete(sessions).where(eq(sessions.userId, target.id)).returning({ id: sessions.id });
+    logAudit("team_sign_out_everywhere", { actorId: actor.id, targetId: target.id, targetType: "user", targetName: target.username, metadata: { sessions: ended.length }, ip: ctx.ip ?? undefined });
+    return { sessions: ended.length };
+  }),
+
+  /** Revoke one of a member's AI agent tokens. */
+  revokeMemberToken: adminProcedure.input(z.object({ id: z.string().uuid(), tokenId: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    panelOnly(ctx);
+    const actor = await actorOf(ctx);
+    const [target] = await db.select().from(users).where(eq(users.id, input.id)).limit(1);
+    if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+    const problem = manageProblem(actor, { id: target.id, isOwner: target.id === actor.owner, isAdmin: target.role === "admin" });
+    if (problem) throw new TRPCError({ code: "FORBIDDEN", message: problem });
+    const [row] = await db.update(apiTokens).set({ revokedAt: new Date() }).where(and(eq(apiTokens.id, input.tokenId), eq(apiTokens.userId, target.id), isNull(apiTokens.revokedAt))).returning({ id: apiTokens.id, name: apiTokens.name });
+    if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
+    logAudit("team_token_revoke", { actorId: actor.id, targetId: row.id, targetType: "api_token", targetName: row.name, metadata: { member: target.username }, ip: ctx.ip ?? undefined });
+    return { success: true };
   }),
 
   invitations: adminProcedure.query(async ({ ctx }) => {
@@ -121,7 +250,7 @@ export const teamRouter = router({
    * Email sending is not built yet, so the link is passed on by hand for now.
    */
   invite: adminProcedure
-    .input(accessInput.extend({ emails: z.array(emailInput).min(1).max(20), note: z.string().trim().max(500).optional(), expiresInDays: z.number().int().refine((d) => (INVITE_DAYS as readonly number[]).includes(d)).default(7) }))
+    .input(accessInput.extend({ emails: z.array(emailInput).min(1).max(20), note: z.string().trim().max(500).optional(), expiresInDays: z.number().int().refine((d) => (INVITE_DAYS as readonly number[]).includes(d)).default(7), origin: originInput }))
     .mutation(async ({ ctx, input }) => {
       panelOnly(ctx);
       const actor = await actorOf(ctx);
@@ -131,29 +260,33 @@ export const teamRouter = router({
       const existing = await db.select({ email: users.email }).from(users).where(inArray(users.email, emails));
       if (existing.length) throw new TRPCError({ code: "CONFLICT", message: `Already a member: ${existing.map((e) => e.email).join(", ")}` });
 
-      const out: { email: string; path: string; expiresAt: Date }[] = [];
+      const out: InviteLink[] = [];
       for (const email of emails) {
         // A new invitation replaces any earlier one for the same address, so only one link ever works.
         await db.update(invitations).set({ revokedAt: new Date() }).where(and(eq(invitations.email, email), isNull(invitations.acceptedAt), isNull(invitations.revokedAt)));
         const { token, hash } = newInviteToken();
         const expiresAt = new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000);
         const [row] = await db.insert(invitations).values({ email, role: access.role, allApps: access.allApps, siteIds: access.siteIds, grants: access.grants, note: input.note || null, tokenHash: hash, invitedBy: actor.id, expiresAt }).returning({ id: invitations.id });
-        logAudit("team_invite", { actorId: actor.id, targetId: row.id, targetType: "invitation", targetName: email, metadata: { role: access.role, allApps: access.allApps, apps: access.siteIds.length, grants: access.grants }, ip: ctx.ip ?? undefined });
-        out.push({ email, path: `/invite/${token}`, expiresAt });
+        const path = `/invite/${token}`;
+        const mail = await emailInvite({ email, role: access.role, allApps: access.allApps, siteIds: access.siteIds, note: input.note || null, expiresAt }, path, actor.id, input.origin);
+        logAudit("team_invite", { actorId: actor.id, targetId: row.id, targetType: "invitation", targetName: email, metadata: { role: access.role, allApps: access.allApps, apps: access.siteIds.length, grants: access.grants, emailed: mail.emailed }, ip: ctx.ip ?? undefined });
+        out.push({ email, path, expiresAt, ...mail });
       }
       return out;
     }),
 
   /** A fresh link for an invitation that is waiting or has expired. The old link stops working. */
-  renewInvite: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+  renewInvite: adminProcedure.input(z.object({ id: z.string().uuid(), send: z.boolean().default(true), origin: originInput })).mutation(async ({ ctx, input }): Promise<InviteLink> => {
     panelOnly(ctx);
     const [inv] = await db.select().from(invitations).where(eq(invitations.id, input.id)).limit(1);
     if (!inv || inv.acceptedAt || inv.revokedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Invitation not found" });
     const { token, hash } = newInviteToken();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     await db.update(invitations).set({ tokenHash: hash, expiresAt }).where(eq(invitations.id, inv.id));
-    logAudit("team_invite", { actorId: ctx.user!.sub, targetId: inv.id, targetType: "invitation", targetName: inv.email, metadata: { renewed: true }, ip: ctx.ip ?? undefined });
-    return { email: inv.email, path: `/invite/${token}`, expiresAt };
+    const path = `/invite/${token}`;
+    const mail = input.send ? await emailInvite({ ...inv, expiresAt }, path, ctx.user!.sub, input.origin) : { emailed: false };
+    logAudit("team_invite", { actorId: ctx.user!.sub, targetId: inv.id, targetType: "invitation", targetName: inv.email, metadata: { renewed: true, emailed: mail.emailed }, ip: ctx.ip ?? undefined });
+    return { email: inv.email, path, expiresAt, ...mail };
   }),
 
   cancelInvite: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
@@ -176,7 +309,9 @@ export const teamRouter = router({
     const state = inviteState(inv);
     if (state !== "waiting") return { state, inviter: inv.inviter };
     const apps = inv.allApps || !inv.siteIds.length ? [] : await db.select({ domain: sites.domain }).from(sites).where(inArray(sites.id, inv.siteIds));
-    return { state, email: inv.email, role: inv.role, allApps: inv.allApps, apps: apps.map((a) => a.domain), grants: inv.grants, note: inv.note, inviter: inv.inviter, expiresAt: inv.expiresAt };
+    const twoStepRequired = (await twoStep.teamRules()).requireTwoFactor;
+    const teamName = (await getEmailSettings())?.teamName?.trim() || null;
+    return { state, email: inv.email, role: inv.role, allApps: inv.allApps, apps: apps.map((a) => a.domain), grants: inv.grants, note: inv.note, inviter: inv.inviter, expiresAt: inv.expiresAt, twoStepRequired, teamName };
   }),
 
   /** Public: accept an invitation by choosing a username and password. Signs the new member in. */
@@ -204,7 +339,9 @@ export const teamRouter = router({
       }
       await db.update(invitations).set({ acceptedBy: user.id }).where(eq(invitations.id, inv.id));
       logAudit("team_accept", { actorId: user.id, targetId: inv.id, targetType: "invitation", targetName: inv.email, metadata: { role }, ip: ctx.ip ?? undefined });
-      return issueSession(user);
+      // A team that requires 2-step sign-in: set it up first (auth.setupStart / setupConfirm), then the session.
+      if ((await twoStep.teamRules()).requireTwoFactor) return { step: "setup" as const, challenge: twoStep.signChallenge(user.id, "setup") };
+      return issueSession(user, { ip: ctx.ip, userAgent: ctx.userAgent, method: "invitation" });
     }),
 
   /** Change a member's role, apps and extras. Applies at once; they do not have to sign in again. */
@@ -286,7 +423,7 @@ export const teamRouter = router({
    * Approve: the person gets an invitation as a developer who can create and run their own apps, and sees no one else's.
    * Decline: nothing is created.
    */
-  decideRequest: adminProcedure.input(z.object({ id: z.string().uuid(), approve: z.boolean() })).mutation(async ({ ctx, input }) => {
+  decideRequest: adminProcedure.input(z.object({ id: z.string().uuid(), approve: z.boolean(), origin: originInput })).mutation(async ({ ctx, input }) => {
     panelOnly(ctx);
     const [req] = await db.update(accessRequests).set({ status: input.approve ? "approved" : "declined", decidedBy: ctx.user!.sub, decidedAt: new Date() }).where(and(eq(accessRequests.id, input.id), eq(accessRequests.status, "pending"))).returning();
     if (!req) throw new TRPCError({ code: "NOT_FOUND", message: "Request not found" });
@@ -296,6 +433,8 @@ export const teamRouter = router({
     const { token, hash } = newInviteToken();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     await db.insert(invitations).values({ email: req.email, role: "developer", allApps: false, siteIds: [], grants: { createApps: true, deleteApps: true, agentTokens: true }, tokenHash: hash, invitedBy: ctx.user!.sub, expiresAt });
-    return { approved: true as const, email: req.email, path: `/invite/${token}`, expiresAt };
+    const path = `/invite/${token}`;
+    const mail = await emailInvite({ email: req.email, role: "developer", allApps: false, siteIds: [], note: null, expiresAt }, path, ctx.user!.sub, input.origin);
+    return { approved: true as const, email: req.email, path, expiresAt, ...mail };
   }),
 });

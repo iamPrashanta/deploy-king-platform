@@ -3,10 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Check, X } from "lucide-react";
+import { Check, ShieldCheck, X } from "lucide-react";
 import { trpc } from "@/utils/trpc";
 import { Crown } from "@/components/shell/Shell";
 import { Skeleton, Spinner, errMsg } from "@/components/ui";
+import { TWO_STEP_KEY } from "@/components/paths";
 
 /** Public page: accept an invitation by choosing a username and password. */
 
@@ -27,6 +28,12 @@ export default function AcceptInvitePage() {
   const [error, setError] = useState("");
   const accept = trpc.team.accept.useMutation({
     onSuccess: (data: any) => {
+      if (data.step === "setup") {
+        // The team requires 2-step sign-in: the account exists, the session comes after setting it up.
+        sessionStorage.setItem(TWO_STEP_KEY, data.challenge);
+        router.push("/setup/two-step");
+        return;
+      }
       localStorage.setItem("token", data.token);
       window.location.href = "/"; // a full load, so the panel starts with the new session
     },
@@ -54,7 +61,7 @@ export default function AcceptInvitePage() {
             </>
           ) : (
             <>
-              <h1>Join the team</h1>
+              <h1>{d.teamName ? `Join ${d.teamName}` : "Join the team"}</h1>
               <p className="sub">{d.inviter ? `${d.inviter} invited ` : "You are invited: "}<strong style={{ color: "var(--text)" }}>{d.email}</strong> as {ROLE[d.role]?.label ?? d.role}.</p>
               {d.note && <div className="notice small" style={{ marginBottom: 16 }}>&ldquo;{d.note}&rdquo;</div>}
               <div className="card card-pad" style={{ background: "var(--card-2)", marginBottom: 20 }}>
@@ -81,6 +88,7 @@ export default function AcceptInvitePage() {
                   <input id="ip2" className="input" type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} required aria-invalid={again.length > 0 && again !== password} />
                   {again.length > 0 && again !== password && <div className="hint bad-text">The two passwords are different.</div>}
                 </div>
+                {d.twoStepRequired && <div className="notice info small" style={{ marginBottom: 16 }}><ShieldCheck size={15} /> <span>This team requires 2-step sign-in. You set it up on the next screen.</span></div>}
                 {error && <div className="notice bad" style={{ marginBottom: 16 }}>{error}</div>}
                 <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={!ready || accept.isLoading}>{accept.isLoading ? <Spinner /> : "Accept and continue"}</button>
               </form>

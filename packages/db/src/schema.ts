@@ -1063,3 +1063,55 @@ export const sshSessions = pgTable("ssh_sessions", {
 export type SshKey = typeof sshKeys.$inferSelect;
 export type SshServer = typeof sshServers.$inferSelect;
 export type SshSession = typeof sshSessions.$inferSelect;
+// ─── SECURITY AGENT: 2-step sign-in, sign-in devices, alerts, GitHub App ─────
+// (added by the "security" agent; new tables only)
+// 2-step sign-in (TOTP) of one user. enabledAt null = set up was started and not confirmed yet.
+export const userTwoFactor = pgTable("user_two_factor", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  /** The shared secret (base32), encrypted with MASTER_KEY. */
+  secretEnc: text("secret_enc").notNull(),
+  enabledAt: timestamp("enabled_at"),
+  /** SHA-256 of each unused recovery code. A code is removed when it is used. */
+  recoveryHashes: jsonb("recovery_hashes").$type<string[]>().notNull().default([]),
+  /** The 30-second step of the last code accepted, so a code cannot be used twice. */
+  lastStep: bigint("last_step", { mode: "number" }),
+  /** Wrong codes in a row; reset by a right one. */
+  failures: integer("failures").notNull().default(0),
+  lockedUntil: timestamp("locked_until"),
+  resetBy: uuid("reset_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+// Where a session was signed in from, for "Signed in on" on a member's page.
+export const sessionDevices = pgTable("session_devices", {
+  sessionId: uuid("session_id").primaryKey().references(() => sessions.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  userAgent: varchar("user_agent", { length: 500 }),
+  /** password | 2-step | recovery code | invitation */
+  method: varchar("method", { length: 20 }),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => ({ byUser: index("session_devices_user_idx").on(t.userId) }));
+// One row per thing an alert was sent about. Used to send no more than one alert per item per hour.
+export const alertState = pgTable("alert_state", {
+  kind: varchar("kind", { length: 20 }).notNull(), // job_failed | worker_crash | deploy_failed | host_urgent | test
+  itemKey: varchar("item_key", { length: 300 }).notNull(),
+  title: text("title").notNull(),
+  lastSentAt: timestamp("last_sent_at").notNull().defaultNow(),
+  /** Repeats that were not sent because one went out less than an hour before. */
+  suppressed: integer("suppressed").notNull().default(0),
+  /** What happened on each channel the last time, e.g. { email: "sent", webhook: "HTTP 404" }. */
+  result: jsonb("result").$type<Record<string, string>>().notNull().default({}),
+}, (t) => ({ pk: primaryKey({ columns: [t.kind, t.itemKey] }), bySent: index("alert_state_sent_idx").on(t.lastSentAt) }));
+// An installation of this panel's GitHub App on one account or organization. Its git_providers row
+// (type "github_app") is what apps point at; tokens are made from the App's key when they are needed.
+export const githubAppInstallations = pgTable("github_app_installations", {
+  installationId: bigint("installation_id", { mode: "number" }).primaryKey(),
+  providerId: uuid("provider_id").notNull().references(() => gitProviders.id, { onDelete: "cascade" }),
+  account: varchar("account", { length: 100 }).notNull(),
+  accountType: varchar("account_type", { length: 20 }).notNull(), // User | Organization
+  /** all | selected */
+  repositorySelection: varchar("repository_selection", { length: 12 }).notNull().default("selected"),
+  suspendedAt: timestamp("suspended_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+export type UserTwoFactor = typeof userTwoFactor.$inferSelect;
+export type AlertState = typeof alertState.$inferSelect;
+export type GithubAppInstallation = typeof githubAppInstallations.$inferSelect;
