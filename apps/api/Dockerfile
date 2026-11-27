@@ -14,7 +14,7 @@ WORKDIR /repo
 ENV CI=true PNPM_HOME=/pnpm
 # The package store depends only on the lockfile, so this layer is reused until it changes.
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm fetch
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm fetch --ignore-scripts
 COPY . .
 # pnpm deploy copies the API and the workspace packages it uses (sources included) with
 # production dependencies only.

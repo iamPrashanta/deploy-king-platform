@@ -12,7 +12,7 @@ RUN corepack enable
 WORKDIR /repo
 ENV CI=true PNPM_HOME=/pnpm
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm fetch
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm fetch --ignore-scripts
 COPY . .
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store \
  && pnpm --filter @dbbkp/worker --prod deploy /out \

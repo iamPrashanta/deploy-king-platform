@@ -8,7 +8,7 @@ RUN corepack enable
 WORKDIR /repo
 ENV CI=true PNPM_HOME=/pnpm NEXT_TELEMETRY_DISABLED=1
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm fetch
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm fetch --ignore-scripts
 COPY . .
 # The panel imports the API's types, so the API's packages are installed too (no scripts: nothing native is needed).
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store \
