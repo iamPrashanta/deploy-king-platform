@@ -29,6 +29,9 @@ importers:
       '@dbbkp/audit':
         specifier: workspace:*
         version: link:../../packages/audit
+      '@dbbkp/backup':
+        specifier: workspace:*
+        version: link:../../packages/backup
       '@dbbkp/buildplan':
         specifier: workspace:*
         version: link:../../packages/buildplan
@@ -266,6 +269,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@dbbkp/backup':
+        specifier: workspace:*
+        version: link:../../packages/backup
       '@dbbkp/buildplan':
         specifier: workspace:*
         version: link:../../packages/buildplan
@@ -330,6 +336,43 @@ importers:
       '@dbbkp/db':
         specifier: workspace:*
         version: link:../db
+
+  packages/backup:
+    dependencies:
+      '@dbbkp/db':
+        specifier: workspace:*
+        version: link:../db
+      '@dbbkp/security':
+        specifier: workspace:*
+        version: link:../security
+      dockerode:
+        specifier: ^4.0.2
+        version: 4.0.12
+      drizzle-orm:
+        specifier: ^0.30.10
+        version: 0.30.10(@types/react@18.3.31)(postgres@3.4.9)(react@18.3.1)
+      fs-extra:
+        specifier: ^11.2.0
+        version: 11.4.1
+      tar:
+        specifier: ^6.2.1
+        version: 6.2.1
+    devDependencies:
+      '@types/dockerode':
+        specifier: ^3.3.29
+        version: 3.3.47
+      '@types/fs-extra':
+        specifier: ^11.0.4
+        version: 11.0.4
+      '@types/node':
+        specifier: ^20.8.0
+        version: 20.19.43
+      '@types/tar':
+        specifier: ^6.1.13
+        version: 6.1.13
+      typescript:
+        specifier: ^5.2.2
+        version: 5.9.3
 
   packages/buildplan:
     devDependencies:

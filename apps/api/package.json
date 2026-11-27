@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@dbbkp/audit": "workspace:*",
+    "@dbbkp/backup": "workspace:*",
     "@dbbkp/buildplan": "workspace:*",
     "@dbbkp/db": "workspace:*",
     "@dbbkp/runner": "workspace:*",

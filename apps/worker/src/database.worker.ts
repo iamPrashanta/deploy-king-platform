@@ -2,7 +2,7 @@ import { Worker } from "bullmq";
 import { connection } from "./connection";
 import { db, dbInstances } from "@dbbkp/db";
 import { eq } from "drizzle-orm";
-import execa from "execa";
+import { ident, literal, localConn, psql } from "@dbbkp/backup";
 
 export const databaseWorker = new Worker(
   "database",
@@ -17,17 +17,16 @@ export const databaseWorker = new Worker(
     console.log(`[DatabaseWorker] Provisioning PostgreSQL database: ${dbName} for user: ${dbUser}`);
 
     try {
-      // Create Database
-      await execa("sudo", ["-u", "postgres", "psql", "-c", `CREATE DATABASE "${dbName}";`]);
+      // On the server's own PostgreSQL: DK_PG_ADMIN_URL when set, the postgres user through sudo otherwise (@dbbkp/backup).
+      const admin = localConn("postgres");
+      await psql(admin, `CREATE DATABASE ${ident(dbName)}`);
       console.log(`[DatabaseWorker] Created database: ${dbName}`);
 
-      // Create User with Password
-      await execa("sudo", ["-u", "postgres", "psql", "-c", `CREATE USER "${dbUser}" WITH ENCRYPTED PASSWORD '${dbPass}';`]);
+      await psql(admin, `CREATE USER ${ident(dbUser)} WITH ENCRYPTED PASSWORD ${literal(dbPass)}`);
       console.log(`[DatabaseWorker] Created user: ${dbUser}`);
 
-      // Grant Privileges
-      await execa("sudo", ["-u", "postgres", "psql", "-c", `GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${dbUser}";`]);
-      await execa("sudo", ["-u", "postgres", "psql", "-d", dbName, "-c", `ALTER SCHEMA public OWNER TO "${dbUser}";`]);
+      await psql(admin, `GRANT ALL PRIVILEGES ON DATABASE ${ident(dbName)} TO ${ident(dbUser)}`);
+      await psql(localConn(dbName), `ALTER SCHEMA public OWNER TO ${ident(dbUser)}`);
       console.log(`[DatabaseWorker] Granted privileges for ${dbName} to ${dbUser}`);
 
       return { success: true, message: `Database ${dbName} provisioned` };

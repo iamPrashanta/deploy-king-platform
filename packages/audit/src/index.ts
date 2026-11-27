@@ -49,7 +49,16 @@ export type AuditAction =
   | "team_member_update"
   | "team_member_suspend"
   | "team_member_remove"
-  | "access_request_decide";
+  | "access_request_decide"
+  // data agent: databases, backups, restores, files
+  | "db_connect"
+  | "backup_run"
+  | "backup_restore"
+  | "backup_policy"
+  | "backup_destination"
+  | "file_upload"
+  | "file_delete"
+  | "folder_create";
 
 export interface AuditContext {
   /** UUID of the user performing the action */

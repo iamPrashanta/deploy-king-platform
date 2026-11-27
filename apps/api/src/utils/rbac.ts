@@ -55,6 +55,8 @@ export const PERMISSIONS = {
   SECURITY_RESOLVE: "security.resolve",
   AUDIT_VIEW: "audit.view",
   AGENT_TOKENS: "agent.tokens",
+  BACKUP_RUN: "backup.run",
+  BACKUP_RESTORE: "backup.restore",
 } as const;
 
 /**

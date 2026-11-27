@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dbbkp/backup": "workspace:*",
     "@dbbkp/buildplan": "workspace:*",
     "@dbbkp/db": "workspace:*",
     "@dbbkp/runner": "workspace:*",

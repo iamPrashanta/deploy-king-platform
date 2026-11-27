@@ -22,8 +22,8 @@ export const TEAM_ROLES = ["admin", "developer", "viewer"] as const;
 export type TeamRole = (typeof TEAM_ROLES)[number];
 
 /** Extras that are off until switched on for one member. Only meaningful for developers. */
-export type MemberGrants = { createApps?: boolean; deleteApps?: boolean; terminal?: boolean; agentTokens?: boolean };
-export const GRANT_KEYS = ["createApps", "deleteApps", "terminal", "agentTokens"] as const;
+export type MemberGrants = { createApps?: boolean; deleteApps?: boolean; terminal?: boolean; agentTokens?: boolean; restoreBackups?: boolean };
+export const GRANT_KEYS = ["createApps", "deleteApps", "terminal", "agentTokens", "restoreBackups"] as const;
 
 /** Permission keys, as checked by permissionProcedure. Kept here so the rules below can be tested without a database. */
 export const P = {
@@ -34,6 +34,9 @@ export const P = {
   TERMINAL_WRITE: "terminal.write",
   CRON_CREATE: "cron.create",
   AGENT_TOKENS: "agent.tokens",
+  // Data: making a backup and restoring one are separate. Developers back up their apps; restoring is an extra.
+  BACKUP_RUN: "backup.run",
+  BACKUP_RESTORE: "backup.restore",
 } as const;
 
 /** Pure: what a team role with these extras may do. Admins are handled before this is reached. */
@@ -43,6 +46,8 @@ export function memberPermissions(role: TeamRole, grants: MemberGrants | null | 
   if (role === "viewer") return out;
   out.add(P.SITE_DEPLOY);
   out.add(P.CRON_CREATE);
+  out.add(P.BACKUP_RUN);
+  if (grants?.restoreBackups) out.add(P.BACKUP_RESTORE);
   if (grants?.createApps) out.add(P.SITE_CREATE);
   if (grants?.deleteApps) out.add(P.SITE_DELETE);
   if (grants?.terminal) {
