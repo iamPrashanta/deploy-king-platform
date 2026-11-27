@@ -80,20 +80,16 @@ done
 # 5. Check Internal Connectivity & Services
 log "Testing service connectivity..."
 
-# Load env for passwords
+env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -n 1; }
 if [[ -f "$ENV_FILE" ]]; then
-  # Postgres Check via container
-  DB_CHECK=$(docker exec dbbkp-postgres pg_isready -U "$(jq -r '.DB_USER' "$ENV_FILE" 2>/dev/null || echo "dbbkp")" 2>/dev/null)
-  if [[ $? -eq 0 ]]; then
+  if docker exec dbbkp-postgres pg_isready -U "$(env_get POSTGRES_USER | grep . || echo dbbkp)" >/dev/null 2>&1; then
     ok "Database (Postgres): Reachable"
   else
     err "Database (Postgres): Unreachable"
   fi
 
-  # Redis Check via container
-  REDIS_PASS=$(grep REDIS_PASSWORD "$ENV_FILE" | cut -d'=' -f2)
-  REDIS_CHECK=$(docker exec dbbkp-redis redis-cli -a "$REDIS_PASS" ping 2>/dev/null || echo "PONG")
-  if [[ "$REDIS_CHECK" == *"PONG"* ]]; then
+  # the container has the password in REDISCLI_AUTH
+  if [[ "$(docker exec dbbkp-redis redis-cli ping 2>/dev/null)" == *PONG* ]]; then
     ok "Cache (Redis): Reachable"
   else
     err "Cache (Redis): Unreachable"
@@ -109,11 +105,12 @@ else
   warn "API Health Endpoint: Returned $API_HEALTH (check logs if persistent)"
 fi
 
-# 7. Docker Network
-if docker network inspect dbbkp >/dev/null 2>&1; then
-  ok "Docker Network (dbbkp): Healthy"
+# 7. Docker network shared by Traefik and the apps
+NET=$(env_get DBBKP_NETWORK); NET=${NET:-dbbkp}
+if docker network inspect "$NET" >/dev/null 2>&1; then
+  ok "Docker Network ($NET): Healthy"
 else
-  err "Docker Network (dbbkp): Missing"
+  err "Docker Network ($NET): Missing"
 fi
 
 echo -e "\n${BLUE}Health check complete.${NC}"

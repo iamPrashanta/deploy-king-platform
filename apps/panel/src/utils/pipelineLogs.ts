@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { wsBase } from "./ws";
 
 export type TerminalLine = {
   id: number;
@@ -11,11 +12,7 @@ export type TerminalLine = {
 
 const MAX_LINES = 1000;
 
-function wsBaseUrl() {
-  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-  return apiUrl.replace(/^http/, "ws");
-}
+const wsBaseUrl = wsBase;
 
 export function usePipelineLogs(jobId?: string | null, initialLog?: string | null) {
   const [status, setStatus] = useState<"idle" | "connecting" | "open" | "closed">("idle");

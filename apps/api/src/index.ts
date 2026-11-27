@@ -33,6 +33,8 @@ import { syncSchedules } from "./services/cronjobs";
 import { syncBackupSchedules } from "./services/backups";
 import filesRest from "./routes/files";
 import { startReconciliationLoop } from "./services/reconciler";
+import { runMigrations, ensureFirstAdmin, db } from "@dbbkp/db";
+import { sql } from "drizzle-orm";
 
 const app = express();
 
@@ -80,8 +82,14 @@ app.use("/api/backup", requireAuth, requireAdmin, backupRouterLegacy);
 app.use("/api/infra", requireAuth, requireAdmin, infraRouterLegacy);
 
 // ─── Health ────────────────────────────────────────────────
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", ts: Date.now() });
+// Used by the container health check and the installer. 503 while the database does not answer.
+app.get("/health", async (_req, res) => {
+  try {
+    await db.execute(sql`select 1`);
+    res.json({ status: "ok", ts: Date.now() });
+  } catch {
+    res.status(503).json({ status: "error", error: "database unavailable", ts: Date.now() });
+  }
 });
 
 app.post("/internal/log", (req, res) => {
@@ -111,12 +119,21 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 
 // ─── HTTP + WS Server ──────────────────────────────────────
-// Re-register workflow schedules on boot (BullMQ keeps them, this repairs drift).
-syncAllSchedules()
-  .then((n) => console.log(`[Workflows] ${n} workflow schedules checked`))
-  .catch((err) => console.error("[Workflows] Could not sync schedules:", err.message));
-
 async function startServer() {
+  // A new install or an update needs no manual step: apply migrations, then create the
+  // first admin from INITIAL_ADMIN_PASSWORD if there is no user yet. DB_AUTO_MIGRATE=false turns this off.
+  if (process.env.DB_AUTO_MIGRATE !== "false") {
+    console.log("[DB] Applying migrations...");
+    await runMigrations();
+    console.log("[DB] Migrations are up to date");
+    await ensureFirstAdmin();
+  }
+
+  // Re-register workflow schedules on boot (BullMQ keeps them, this repairs drift).
+  syncAllSchedules()
+    .then((n) => console.log(`[Workflows] ${n} workflow schedules checked`))
+    .catch((err) => console.error("[Workflows] Could not sync schedules:", err.message));
+
   const DEFAULT_PORT = Number(process.env.API_PORT ?? 4000);
   
   // Use a fixed port to keep frontend alignment

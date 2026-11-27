@@ -4,7 +4,7 @@ A self-hosted platform for deploying and running apps on your own server, in the
 
 You point it at a GitHub repository, a ZIP file or a Docker image. It works out how to build the app, runs it in a container behind HTTPS, and keeps it running. On the way it checks that the app fits on the server, asks you when it needs a decision instead of failing, and watches the server for anything that should not be there.
 
-> **Status (November 2026).** Everything below works in development and is covered by the checks in `tests/local`. Installing on a server with one command **is not finished yet**: see [Install on a server](#install-on-a-server) for what works today and what is missing.
+> **Status (November 2026).** Everything below works in development and is covered by the checks in `tests/local`. The server installer builds the container images on the server; prebuilt images are not published yet. See [Install on a server](#install-on-a-server).
 
 ---
 
@@ -247,130 +247,72 @@ bash tests/local/checks/installcheck.sh        # the installer's checks, on made
 
 ## Install on a server
 
+### One command
+
+On a fresh Ubuntu or Debian server, as root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/iamPrashanta/deploy-king-platform/v3.x/scripts/install.sh | sudo bash -s -- --domain example.com
+```
+
+The installer shows a plan and asks once. Then it:
+
+- installs Docker if it is missing
+- gets the source into `/opt/dbbkp/src` and builds the images on the server (a few minutes)
+- writes `/opt/dbbkp/.env` with new passwords and secrets
+- starts PostgreSQL, Redis, Traefik, the API, the worker and the panel
+- signs in with the admin password once, to check it works, and prints it
+
+Sign in as `admin` with the printed password. You are asked to change it.
+
+Without `--domain`, the panel is at `http://<server-ip>:3000`, and apps answer only on the server itself (`<name>.localhost`).
+
 ### Before you start
 
-- **A domain.** Point it at the server's IP: `portal.example.com` for the panel, and a wildcard `*.example.com` so every app gets `<name>.example.com`.
+- **A domain.** Point it at the server's IP: `portal.example.com` for the panel, and a wildcard `*.example.com` so every app gets `<name>.example.com`. With a domain, HTTPS certificates come from Let's Encrypt (add `--email you@example.com`).
+- **Memory.** Building the images needs about 2 GB. On a smaller server, add swap first, or use `--images ghcr` once the images are published.
 - **A used server is fine.** The installer was written for servers that already run websites. It lists what is there, and changes nothing until you confirm.
 
-### What the installer checks (`scripts/install.sh`)
+### Options
+
+```bash
+sudo bash install.sh --dry-run                  # show the plan, change nothing
+sudo bash install.sh --domain example.com --yes # no question (scripts, CI)
+sudo bash install.sh --images ghcr              # pull prebuilt images instead of building
+sudo bash install.sh --version v3.1.0           # a release: git tag, or image tag with --images ghcr
+sudo bash install.sh --force                    # next to another control panel
+sudo bash install.sh --mode existing-panel      # side by side even on a free server
+```
+
+From a checkout (`git clone ...; sudo bash scripts/install.sh`), it builds from that checkout instead of cloning.
+
+**Prebuilt images.** `.github/workflows/images.yml` publishes `ghcr.io/iamprashanta/deploy-king-api`, `-worker` and `-panel` (amd64 and arm64) for every version tag and for `v3.x`. They are not published yet; until then use the default, which builds on the server.
+
+### What the installer checks
 
 - Who uses ports 80 and 443, which web servers are installed (even if stopped), which sites they serve, which databases already listen, which containers run.
 - **Another control panel** (cPanel/WHM, Plesk, CyberPanel, aaPanel, DirectAdmin, HestiaCP, VestaCP, CloudPanel, Virtualmin, Coolify, Dokploy, CapRover): it stops, because two panels on one web server undo each other's work. `--force` installs side by side anyway.
 - **A web server already on 80/443:** it installs **side by side**. Its own proxy uses other ports (8088/8444), and existing sites are untouched. It writes `nginx.conf` and `apache.conf` examples to `/opt/dbbkp/side-by-side/`. You copy one into your web server to send the Deploy King addresses on.
 - **Low memory or disk:** it notes it, and stops below 1 GB of memory or 5 GB of free disk.
-- It prints the plan and asks once before changing anything.
+
+It also installs the **server watch** (`scripts/install-scan.sh`): a read-only scan every five minutes, and the helper behind Remove and Undo on the Security page. It needs systemd.
+
+### Running it again
+
+Running the installer again is safe. It keeps the passwords, ports, data and mode of the first install, gets the new source, rebuilds and restarts. `sudo bash /opt/dbbkp/scripts/update.sh` does the same.
+
+The API applies database migrations by itself when it starts. There is no manual step.
+
+### Without the installer
+
+The same stack runs with Docker Compose alone, from a checkout:
 
 ```bash
-sudo bash scripts/install.sh --dry-run                       # show the plan, change nothing
-sudo bash scripts/install.sh --domain example.com            # install
-sudo bash scripts/install.sh --domain example.com --yes      # without the question (scripts, CI)
-sudo bash scripts/install.sh --force                         # next to another control panel
-sudo bash scripts/install.sh --mode existing-panel           # side by side even on a free server
+bash deploy/gen-env.sh                                  # writes deploy/.env with new secrets, prints the admin password
+docker compose -f deploy/compose.yml up -d --build --wait
 ```
 
-It also installs the **server watch** (`scripts/install-scan.sh`): a read-only scan every five minutes, and the helper behind Remove and Undo on the Security page.
-
-### What is missing for a one-command install
-
-The installer starts the platform from prebuilt images (`ghcr.io/dbbkp/api`, `worker`, `panel`, `agent`). **Those images are not published yet**, so the final `docker compose up` step fails. Three more gaps:
-
-- `apps/panel` has no Dockerfile, so `docker-compose.prod.yml` cannot build the panel either.
-- `apps/api/Dockerfile` and `apps/worker/Dockerfile` predate the current code and need updating.
-- The installer prints an "Admin password" that is never applied. Create the first admin as described below.
-
-Until these are fixed, install from source.
-
-### Install from source
-
-> This route follows the code but has not yet been run end to end on a real server. Treat the commands as a starting point and check each step.
-
-**1. Install the tools**
-
-```bash
-sudo apt-get update
-sudo apt-get install -y docker.io docker-compose-plugin git python3 curl
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash - && sudo apt-get install -y nodejs
-sudo corepack enable
-```
-
-**2. Get the code**
-
-```bash
-sudo git clone https://github.com/iamPrashanta/deploy-king-platform.git /opt/deploy-king
-cd /opt/deploy-king && sudo pnpm install --frozen-lockfile
-```
-
-**3. Start PostgreSQL and Redis.** First change `POSTGRES_PASSWORD` in `docker-compose.yml`, then:
-
-```bash
-sudo docker compose up -d dbbkp-postgres dbbkp-redis
-```
-
-**4. Write `.env`** as in development, but with production values:
-- strong `JWT_SECRET`, `INTERNAL_SECRET` and `MASTER_KEY` (keep a copy of `MASTER_KEY`: without it, stored variables cannot be read)
-- `DBBKP_TLS=true`
-- `DBBKP_BASE_DOMAIN=example.com`
-- `SITES_ROOT=/var/www/sites`
-- `GITHUB_WEBHOOK_SECRET` if you deploy on push
-
-**5. Create the database and the first admin**
-
-```bash
-sudo bash -c "set -a; . ./.env; set +a; pnpm db:migrate && INITIAL_ADMIN_PASSWORD='choose-a-strong-password' pnpm db:seed"
-```
-
-**6. Start Traefik with HTTPS** (Let's Encrypt, TLS challenge):
-
-```bash
-sudo docker network create dbbkp
-sudo docker run -d --name dbbkp-traefik --restart unless-stopped --network dbbkp \
-  -p 80:80 -p 443:443 --add-host host.docker.internal:host-gateway \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro -v /opt/deploy-king/data/letsencrypt:/letsencrypt \
-  -v /opt/deploy-king/traefik:/etc/traefik/dynamic:ro \
-  traefik:v3.1 \
-  --providers.docker=true --providers.docker.exposedbydefault=false --providers.docker.network=dbbkp \
-  --providers.file.directory=/etc/traefik/dynamic \
-  --entrypoints.web.address=:80 --entrypoints.websecure.address=:443 \
-  --certificatesresolvers.letsencrypt.acme.tlschallenge=true \
-  --certificatesresolvers.letsencrypt.acme.email=you@example.com \
-  --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-```
-
-Save this as `/opt/deploy-king/traefik/panel.yml`. It sends the panel's address to the panel on the host:
-
-```yaml
-http:
-  routers:
-    panel:
-      rule: Host(`portal.example.com`)
-      entryPoints: [websecure]
-      tls: { certResolver: letsencrypt }
-      service: panel
-  services:
-    panel:
-      loadBalancer:
-        servers: [{ url: "http://host.docker.internal:3000" }]
-```
-
-The panel's port 3000 must be reachable from the Traefik container, but should not be open to the internet. Block it in your firewall.
-
-**7. Build the panel and run the three services.** Use systemd, or pm2:
-
-```bash
-sudo pnpm --filter @dbbkp/panel build
-# one service each, from /opt/deploy-king:
-pnpm --filter @dbbkp/api dev       # API on :4000
-pnpm --filter @dbbkp/worker dev    # deploys, workers, scheduled jobs
-pnpm --filter @dbbkp/panel start   # panel on :3000
-```
-
-**8. Turn on the server watch**
-
-```bash
-sudo INSTALL_DIR=/opt/deploy-king bash scripts/install-scan.sh
-```
-
-For the Security page to show findings, the API must be able to read `/opt/deploy-king/scan`. For Remove and Undo, it must read and write `/opt/deploy-king/actions`. Set `HOST_SCAN_FILE` and `HOST_ACTIONS_DIR` in `.env` when the API runs directly on the host rather than in a container.
+The panel is at http://localhost:3000, apps at `http://<name>.localhost`. All settings are in `deploy/.env.example`. For HTTPS, add `deploy/compose.tls.yml` (see the comment at its top).
 
 ### After installing
 
@@ -382,7 +324,7 @@ For the Security page to show findings, the API must be able to read `/opt/deplo
 
 ## Configuration
 
-All settings live in `.env`, at the repository root. The API and the worker find it by themselves; `pnpm db:migrate` and `pnpm db:seed` need it loaded into the shell (`set -a; . ./.env; set +a`). `.env.example` has every setting, with a comment. Put comments on their own lines.
+On a server, the settings are in `/opt/dbbkp/.env`; after a change, run `cd /opt/dbbkp && docker compose up -d`. In development, all settings live in `.env`, at the repository root. The API and the worker find it by themselves; `pnpm db:migrate` and `pnpm db:seed` need it loaded into the shell (`set -a; . ./.env; set +a`). `.env.example` has every setting, with a comment. Put comments on their own lines.
 
 | Setting | What it is | Default |
 | --- | --- | --- |
@@ -411,7 +353,7 @@ Capacity, cleanup and the server watch are set in the panel, under **Settings â€
 
 ## Everyday operations
 
-These scripts belong to the installer layout (`/opt/dbbkp`):
+These scripts belong to the installer layout (`/opt/dbbkp`). The containers are managed with `cd /opt/dbbkp && docker compose ps` (or `logs -f`, `restart`).
 
 | Script | What it does |
 | --- | --- |
@@ -423,7 +365,7 @@ These scripts belong to the installer layout (`/opt/dbbkp`):
 | `scripts/dbbkp.sh` | The `dbbkp` command-line tool for database backups |
 | `scripts/install-dk.sh` | Builds and installs `dk`, the Deploy King assistant for the terminal (`apps/cli`): `dk login` with a token from **AI agents â€º New token**, set `ANTHROPIC_API_KEY`, then `dk` and ask in plain words, for example `deploy ./shop-api.zip as shop-api` |
 
-After pulling new code, always run `pnpm db:migrate`, with `.env` loaded into the shell as above. The migrations are in `packages/db/drizzle`.
+On a server, the API applies new migrations when it starts. In development, after pulling new code, run `pnpm db:migrate` with `.env` loaded into the shell as above (or start the API: it applies them too). The migrations are in `packages/db/drizzle`.
 
 ---
 
@@ -449,7 +391,7 @@ The stack: TypeScript on Node.js, Next.js 15, tRPC, BullMQ on Redis, PostgreSQL 
 
 ## Troubleshooting
 
-**The panel opens but every page fails.** The API is not running on port 4000; the panel forwards to `localhost:4000`.
+**The panel opens but every page fails.** The panel cannot reach the API. In development the API must run on port 4000. In containers, check `docker compose ps` in `/opt/dbbkp` and `docker compose logs dbbkp-api`. The panel finds the API at `DK_API_URL` (or `API_INTERNAL_URL`).
 
 **A deploy finishes but the app's address does not answer.** Check that:
 - Traefik runs on the network named by `DBBKP_NETWORK`
@@ -460,7 +402,7 @@ The stack: TypeScript on Node.js, Next.js 15, tRPC, BullMQ on Redis, PostgreSQL 
 
 **Podman on Windows starts no container at all** (`crun: controller pids is not available`). This is a known incompatibility between WSL 3.0.5 and Podman 6.1.2. Updating Podman and recreating the machine fixes it, but recreating the machine deletes its volumes, including other projects' data.
 
-**Ports 80 or 443 are already taken on a server.** That is expected on a used server. The installer then installs side by side; see [What the installer checks](#what-the-installer-checks-scriptsinstallsh).
+**Ports 80 or 443 are already taken on a server.** That is expected on a used server. The installer then installs side by side; see [What the installer checks](#what-the-installer-checks).
 
 **The Security page says the server watch is not running.** Run `sudo bash scripts/install-scan.sh`. Check that the API can read the scan folder (`HOST_SCAN_FILE`).
 

@@ -49,10 +49,11 @@ log "Stopping systemd service..."
 systemctl stop dbbkp.service >/dev/null 2>&1 || true
 systemctl disable dbbkp.service >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/dbbkp.service
-systemctl daemon-reload
+systemctl daemon-reload 2>/dev/null || true
+[[ -f "$INSTALL_DIR/scripts/install-scan.sh" ]] && bash "$INSTALL_DIR/scripts/install-scan.sh" --remove >/dev/null 2>&1 || true
 
 # 4. Tear down Docker stack
-if [[ -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+if [[ -f "$INSTALL_DIR/compose.yml" || -f "$INSTALL_DIR/docker-compose.yml" ]]; then
   log "Removing Docker containers and volumes..."
   cd "$INSTALL_DIR"
   docker compose down -v --remove-orphans >/dev/null 2>&1 || true

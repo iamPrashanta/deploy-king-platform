@@ -643,7 +643,9 @@ async function assertDiskHasRoom() {
   let usedPct = 0;
   try {
     const st = await (fs as any).statfs(SITES_ROOT);
-    if (st.blocks > 0) usedPct = Math.round(((st.blocks - st.bavail) / st.blocks) * 100);
+    // as df counts it: blocks kept for root are neither used nor available
+    const used = st.blocks - st.bfree;
+    if (used + st.bavail > 0) usedPct = Math.round((used / (used + st.bavail)) * 100);
   } catch {
     return; // cannot measure: do not block the deploy on that
   }

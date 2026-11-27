@@ -1,0 +1,30 @@
+# HTTPS with Let's Encrypt (TLS challenge). Use together with compose.yml:
+#   COMPOSE_FILE=compose.yml:compose.tls.yml        (in .env, next to the compose files)
+# Needs a real domain pointed at this server: PANEL_DOMAIN for the panel, *.DBBKP_BASE_DOMAIN for apps,
+# and port 443 reachable from the internet.
+services:
+  dbbkp-traefik:
+    environment:
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_TLSCHALLENGE: "true"
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${ACME_EMAIL:-}
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_STORAGE: /letsencrypt/acme.json
+
+  dbbkp-api:
+    environment:
+      DBBKP_TLS: "true"
+
+  dbbkp-worker:
+    environment:
+      DBBKP_TLS: "true"
+
+  dbbkp-panel:
+    labels:
+      traefik.http.routers.dk-panel.entrypoints: websecure
+      traefik.http.routers.dk-panel.tls.certresolver: letsencrypt
+      # Plain HTTP only redirects to HTTPS.
+      traefik.http.routers.dk-panel-http.rule: Host(`${PANEL_DOMAIN:-portal.localhost}`)
+      traefik.http.routers.dk-panel-http.entrypoints: web
+      traefik.http.routers.dk-panel-http.service: dk-panel
+      traefik.http.routers.dk-panel-http.middlewares: dk-panel-https
+      traefik.http.middlewares.dk-panel-https.redirectscheme.scheme: https
+      traefik.http.middlewares.dk-panel-https.redirectscheme.permanent: "true"

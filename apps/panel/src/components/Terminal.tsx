@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { sendWsMessage } from "@/utils/ws";
+import { sendWsMessage, wsBase } from "@/utils/ws";
 
 interface TerminalProps {
   containerId: string;
@@ -121,7 +121,7 @@ export default function Terminal({ containerId, siteId, onClose }: TerminalProps
     // We hook into the singleton WS from ws.ts
     // The gateway WS is already maintained globally; we read from it here
     const token = localStorage.getItem("token");
-    const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:4000"}/ws?token=${token}`;
+    const wsUrl = `${wsBase()}/ws?token=${token}`;
     ws = new WebSocket(wsUrl);
     ws.addEventListener("message", handleMessage);
 
