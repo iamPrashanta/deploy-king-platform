@@ -18,9 +18,12 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-di
 COPY . .
 # pnpm deploy copies the API and the workspace packages it uses (sources included) with
 # production dependencies only.
+# The root postinstall (sync-scripts.js) downloads newer copies of two scripts and leaves them empty
+# when it cannot; the image keeps the scripts of this checkout.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store \
+ && cp -r scripts /tmp/dk-scripts \
  && pnpm --filter @dbbkp/api --prod deploy /out \
- && cp -r scripts /out/scripts \
+ && cp -r /tmp/dk-scripts /out/scripts \
  && rm -f /out/Dockerfile \
  # node-pty ships Windows and macOS binaries (about 60 MB); the Linux one was just built.
  && rm -rf /out/node_modules/.pnpm/node-pty@*/node_modules/node-pty/prebuilds \

@@ -402,7 +402,9 @@ export function dueRun(now: number, diskUsedPct: number | null, lastAnyMs: numbe
 async function diskUsedPct(): Promise<number | null> {
   try {
     const st = await (fs as any).statfs(SITES_ROOT);
-    return st.blocks ? Math.round((1 - st.bavail / st.blocks) * 100) : null;
+    // as df counts it: blocks kept for root are neither used nor available
+    const used = st.blocks - st.bfree;
+    return used + st.bavail > 0 ? Math.round((used / (used + st.bavail)) * 100) : null;
   } catch {
     return null;
   }

@@ -14,9 +14,12 @@ ENV CI=true PNPM_HOME=/pnpm
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm fetch --ignore-scripts
 COPY . .
+# The root postinstall (sync-scripts.js) downloads newer copies of two scripts and leaves them empty
+# when it cannot; the image keeps the scripts of this checkout.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store \
+ && cp -r scripts /tmp/dk-scripts \
  && pnpm --filter @dbbkp/worker --prod deploy /out \
- && cp -r scripts /out/scripts \
+ && cp -r /tmp/dk-scripts /out/scripts \
  && rm -f /out/Dockerfile
 
 # ── 2. Runtime ──────────────────────────────────────────────────────────────────

@@ -67,7 +67,7 @@ _ts()   { date '+%Y-%m-%d %H:%M:%S'; }
 log()   { echo -e "${BLUE}[INFO]${NC} $1" | tee -a "$LOG_FILE"; }
 ok()    { echo -e "${GREEN}[OK]${NC}   $1" | tee -a "$LOG_FILE"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1" | tee -a "$LOG_FILE"; }
-err()   { echo -e "${RED}[ERR]${NC}  $1" >&2 | tee -a "$LOG_FILE"; exit 1; }
+err()   { echo -e "${RED}[ERR]${NC}  $1" | tee -a "$LOG_FILE" >&2; exit 1; }
 step()  { echo -e "\n${BOLD}${CYAN}==> $1${NC}" | tee -a "$LOG_FILE"; }
 info()  { echo -e "    ${YELLOW}$1${NC}"; }
 dry()   { echo -e "    ${CYAN}[DRY-RUN]${NC} $1"; }
@@ -88,7 +88,8 @@ if [[ "$EUID" -ne 0 ]]; then
   err "This installer must be run as root (sudo bash install.sh)"
 fi
 
-mkdir -p "$(dirname "$LOG_FILE")" "$INSTALL_DIR"
+mkdir -p "$(dirname "$LOG_FILE")"
+$DRY_RUN || mkdir -p "$INSTALL_DIR"
 echo "=== Deploy King install log — $(_ts) ===" >> "$LOG_FILE"
 
 # Flags not given on a second run keep what the first run chose.
@@ -143,8 +144,9 @@ fi
 ok "Arch: $ARCH"
 
 # ── Resource checks ───────────────────────────────────────────────────────
-RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
-DISK_GB=$(df -BG "$INSTALL_DIR" | awk 'NR==2 {gsub("G",""); print $4}')
+RAM_MB=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+DISK_AT="$INSTALL_DIR"; while [[ ! -d "$DISK_AT" ]]; do DISK_AT=$(dirname "$DISK_AT"); done   # a dry run creates nothing
+DISK_GB=$(df -BG "$DISK_AT" | awk 'NR==2 {gsub("G",""); print $4}')
 CPU_CORES=$(nproc)
 
 if [[ "$RAM_MB" -lt 900 ]]; then
@@ -163,12 +165,22 @@ ok "Resources: ${RAM_MB}MB RAM, ${DISK_GB}GB disk, ${CPU_CORES} CPU cores"
 
 # ── What already runs on this server (read only: nothing here changes anything) ─
 # Which program listens on a TCP port. Prints nothing when the port is free.
+# Without ss (a minimal image), the kernel's own list of listening sockets is read instead.
 port_owner() {
-  local line name
-  line=$(ss -H -ltnp 2>/dev/null | awk -v p="$1" '{ n = split($4, a, ":"); if (a[n] == p) { print; exit } }') || true
-  [[ -z "$line" ]] && return 0
-  name=$(sed -n 's/.*users:(("\([^"]*\)".*/\1/p' <<<"$line")
-  echo "${name:-another program}"
+  local line name hex
+  if command -v ss &>/dev/null; then
+    line=$(ss -H -ltnp 2>/dev/null | awk -v p="$1" '{ n = split($4, a, ":"); if (a[n] == p) { print; exit } }') || true
+    [[ -z "$line" ]] && return 0
+    name=$(sed -n 's/.*users:(("\([^"]*\)".*/\1/p' <<<"$line")
+    echo "${name:-another program}"
+  else
+    hex=$(printf '%04X' "$1")
+    # state 0A is LISTEN; the local address is the second column, ADDR:PORT in hex
+    cat /proc/net/tcp /proc/net/tcp6 2>/dev/null \
+      | awk -v h=":$hex" '$4 == "0A" && substr($2, length($2) - 4) == h { found = 1 } END { exit !found }' \
+      && echo "another program"
+    return 0
+  fi
 }
 
 # Another control panel owns the web server's configuration and rewrites it; two panels on one server undo each other's work.
@@ -195,9 +207,14 @@ command -v caddy &>/dev/null                                   && WEB_SERVERS+=(
 PORT80_OWNER=$(port_owner 80)
 PORT443_OWNER=$(port_owner 443)
 # Running again on an existing install: its own proxy on 80/443 is not "something else".
+# Asked of Docker, because ss cannot always name the process that holds a published port.
+own_port() {
+  [[ "$(env_get "$1")" == "$2" ]] || return 1
+  command -v docker &>/dev/null && docker port dbbkp-traefik 2>/dev/null | grep -qE ":$2\$"
+}
 if [[ -f "$INSTALL_DIR/.env" ]]; then
-  [[ "$PORT80_OWNER" == docker-proxy && "$(env_get TRAEFIK_HTTP_PORT)" == 80 ]] && PORT80_OWNER=""
-  [[ "$PORT443_OWNER" == docker-proxy && "$(env_get TRAEFIK_HTTPS_PORT)" == 443 ]] && PORT443_OWNER=""
+  [[ -n "$PORT80_OWNER" ]] && own_port TRAEFIK_HTTP_PORT 80 && PORT80_OWNER=""
+  [[ -n "$PORT443_OWNER" ]] && own_port TRAEFIK_HTTPS_PORT 443 && PORT443_OWNER=""
 fi
 
 # Addresses the existing web server answers for. Names only; no file is copied and no secret is read.
@@ -261,7 +278,7 @@ NEEDS_SIDE_BY_SIDE=false
 if [[ -z "$INSTALL_MODE" ]]; then
   if $NEEDS_SIDE_BY_SIDE; then INSTALL_MODE="existing-panel"; else INSTALL_MODE="clean"; fi
 elif [[ "$INSTALL_MODE" == "clean" && -n "$PORT80_OWNER$PORT443_OWNER" ]]; then
-  err "--mode clean needs ports 80 and 443, but they are used by ${PORT80_OWNER:-$PORT443_OWNER}. Nothing has been changed. Run without --mode to install side by side."
+  err "A clean install needs ports 80 and 443, but they are used by ${PORT80_OWNER:-$PORT443_OWNER}. Nothing has been changed. Run with --mode existing-panel to install side by side."
 fi
 
 if [[ "$INSTALL_MODE" == "existing-panel" ]]; then
@@ -288,7 +305,7 @@ find_free_port() {
   local port="$1"
   local max=$((port + 100))
   while [[ $port -lt $max ]]; do
-    if ! ss -tulpn 2>/dev/null | grep -q ":${port} "; then
+    if [[ -z "$(port_owner "$port")" ]]; then
       echo "$port"
       return
     fi
@@ -388,7 +405,9 @@ fi
 step "Phase 3: Generating Credentials"
 
 # Kept from the first install when there is one: the database and the stored secrets depend on them.
-secret_hex() { local v; v=$(env_get "$1"); [[ -n "$v" ]] && echo "$v" || openssl rand -hex "$2"; }
+# Made from /dev/urandom with coreutils only: this runs before any package is installed.
+rand_hex() { head -c "$1" /dev/urandom | od -An -v -tx1 | tr -d ' \n'; }
+secret_hex() { local v; v=$(env_get "$1"); [[ -n "$v" ]] && echo "$v" || rand_hex "$2"; }
 POSTGRES_PASSWORD=$(secret_hex POSTGRES_PASSWORD 24)
 REDIS_PASSWORD=$(secret_hex REDIS_PASSWORD 24)
 JWT_SECRET=$(secret_hex JWT_SECRET 48)
@@ -397,7 +416,7 @@ INTERNAL_SECRET=$(secret_hex INTERNAL_SECRET 32)
 MASTER_KEY=$(secret_hex MASTER_KEY 32)
 ADMIN_USER=$(env_get INITIAL_ADMIN_USERNAME); ADMIN_USER=${ADMIN_USER:-admin}
 ADMIN_PASS=$(env_get INITIAL_ADMIN_PASSWORD)
-[[ -z "$ADMIN_PASS" ]] && ADMIN_PASS=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16)
+[[ -z "$ADMIN_PASS" ]] && ADMIN_PASS=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16 || true)
 
 if $EXISTING_INSTALL; then ok "Credentials kept from the existing install"; else ok "Credentials generated (kept only in $INSTALL_DIR/.env, readable by root)"; fi
 
@@ -447,7 +466,7 @@ if ! $DRY_RUN; then
 fi
 
 if id "$APP_USER" &>/dev/null; then
-  run "usermod -aG docker $APP_USER"
+  getent group docker &>/dev/null && run "usermod -aG docker $APP_USER"
 fi
 
 # ==============================================================================
@@ -484,7 +503,7 @@ step "Phase 6: System User & Directories"
 
 if ! id "$APP_USER" &>/dev/null; then
   run "useradd -r -m -s /bin/bash $APP_USER"
-  run "usermod -aG docker $APP_USER"
+  getent group docker &>/dev/null && run "usermod -aG docker $APP_USER"
   ok "System user '$APP_USER' created"
 else
   ok "System user '$APP_USER' already exists"
