@@ -35,7 +35,7 @@ DRY_RUN=false
 FORCE=false        # install next to another control panel
 ASSUME_YES=false   # accept the plan without asking
 IMAGES=""          # source (build here, the default) | ghcr (pull the published images)
-VERSION=""         # ghcr: image tag; source: git ref, when --ref is not given
+WANT_VERSION=""    # ghcr: image tag; source: git ref, when --ref is not given
 GIT_REF=""
 REPO_FLAG=""
 
@@ -46,7 +46,7 @@ while [[ $# -gt 0 ]]; do
     --domain)   need_value "$1" "${2:-}"; USER_DOMAIN="$2";  shift 2 ;;
     --email)    need_value "$1" "${2:-}"; ACME_EMAIL_FLAG="$2"; shift 2 ;;
     --images)   need_value "$1" "${2:-}"; IMAGES="$2";       shift 2 ;;
-    --version)  need_value "$1" "${2:-}"; VERSION="$2";      shift 2 ;;
+    --version)  need_value "$1" "${2:-}"; WANT_VERSION="$2"; shift 2 ;;
     --ref)      need_value "$1" "${2:-}"; GIT_REF="$2";      shift 2 ;;
     --repo)     need_value "$1" "${2:-}"; REPO_FLAG="$2";    shift 2 ;;
     --dir)      need_value "$1" "${2:-}"; INSTALL_DIR="$2";  shift 2 ;;
@@ -130,11 +130,13 @@ step "Phase 1: Pre-flight Checks"
 if [[ ! -f /etc/os-release ]]; then
   err "Cannot detect OS. Only Ubuntu 20.04+ and Debian 11+ are supported."
 fi
-. /etc/os-release
-if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
-  err "Unsupported OS: $PRETTY_NAME. Only Ubuntu and Debian are supported."
+# Read in a subshell: os-release sets VERSION, ID and more, which must not leak into this script.
+OS_ID=$(. /etc/os-release; echo "${ID:-}")
+OS_NAME=$(. /etc/os-release; echo "${PRETTY_NAME:-unknown}")
+if [[ "$OS_ID" != "ubuntu" && "$OS_ID" != "debian" ]]; then
+  err "Unsupported OS: $OS_NAME. Only Ubuntu and Debian are supported."
 fi
-ok "OS: $PRETTY_NAME"
+ok "OS: $OS_NAME"
 
 # ── Architecture ──────────────────────────────────────────────────────────────
 ARCH=$(uname -m)
@@ -531,7 +533,7 @@ if [[ -f "$SCRIPT_PATH" && -z "$REPO_FLAG" && -z "$GIT_REF" ]]; then
   [[ -f "$candidate/deploy/compose.yml" && -f "$candidate/apps/api/Dockerfile" ]] && LOCAL_SRC="$candidate"
 fi
 REPO="${REPO_FLAG:-$(env_get DK_GIT_REPO)}"; REPO="${REPO:-$REPO_URL}"
-REF="${GIT_REF:-$VERSION}"; [[ -z "$REF" ]] && REF=$(env_get DK_GIT_REF)
+REF="${GIT_REF:-$WANT_VERSION}"; [[ -z "$REF" ]] && REF=$(env_get DK_GIT_REF)
 
 if [[ -n "$LOCAL_SRC" ]]; then
   SOURCE_DIR="$LOCAL_SRC"
@@ -559,7 +561,7 @@ fi
 
 if [[ "$IMAGES" == "ghcr" ]]; then
   IMAGE_PREFIX="$GHCR_PREFIX"
-  IMAGE_TAG="${VERSION#v}"; IMAGE_TAG="${IMAGE_TAG:-$(env_get DK_TAG)}"
+  IMAGE_TAG="${WANT_VERSION#v}"; IMAGE_TAG="${IMAGE_TAG:-$(env_get DK_TAG)}"
   [[ -z "$IMAGE_TAG" || "$IMAGE_TAG" == local ]] && IMAGE_TAG=latest
   DK_VERSION_VALUE="$IMAGE_TAG"
 else
