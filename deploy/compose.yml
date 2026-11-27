@@ -16,6 +16,7 @@ x-dk-env: &dk-env
   JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
   INTERNAL_SECRET: ${INTERNAL_SECRET:?Set INTERNAL_SECRET in .env}
   MASTER_KEY: ${MASTER_KEY:?Set MASTER_KEY in .env (64 hex characters)}
+  GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
   API_PORT: "4000"
   API_INTERNAL_URL: http://dbbkp-api:4000
   SITES_ROOT: /var/www/sites

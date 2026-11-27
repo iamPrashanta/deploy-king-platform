@@ -17,6 +17,7 @@ sed -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(hex 24)|" \
     -e "s|^JWT_SECRET=.*|JWT_SECRET=$(hex 48)|" \
     -e "s|^INTERNAL_SECRET=.*|INTERNAL_SECRET=$(hex 32)|" \
     -e "s|^MASTER_KEY=.*|MASTER_KEY=$(hex 32)|" \
+    -e "s|^GITHUB_WEBHOOK_SECRET=.*|GITHUB_WEBHOOK_SECRET=$(hex 32)|" \
     -e "s|^INITIAL_ADMIN_PASSWORD=.*|INITIAL_ADMIN_PASSWORD=$ADMIN_PASS|" \
     "$DIR/.env.example" > "$OUT"
 echo "Wrote $OUT"
