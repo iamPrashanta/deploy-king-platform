@@ -144,7 +144,8 @@ fi
 ok "Arch: $ARCH"
 
 # ── Resource checks ───────────────────────────────────────────────────────
-RAM_MB=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+if command -v free &>/dev/null; then RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
+else RAM_MB=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo); fi   # minimal images have no procps
 DISK_AT="$INSTALL_DIR"; while [[ ! -d "$DISK_AT" ]]; do DISK_AT=$(dirname "$DISK_AT"); done   # a dry run creates nothing
 DISK_GB=$(df -BG "$DISK_AT" | awk 'NR==2 {gsub("G",""); print $4}')
 CPU_CORES=$(nproc)

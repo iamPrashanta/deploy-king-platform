@@ -2,7 +2,7 @@
 # The installer's check of a used server, on made-up servers. Needs only bash; no root, no containers.
 #   bash tests/local/checks/installcheck.sh        (from the repository root, on Linux or WSL)
 # It runs the read-only part of scripts/install.sh (what is found, the mode, the plan, the side-by-side files)
-# with fake `ss`, `free`, `df` and `nginx` commands in front of the real ones.
+# with fake `ss`, `free`, `df`, `docker` and `nginx` commands in front of the real ones.
 S="$(cd "$(dirname "$0")/../../.." && pwd)/scripts/install.sh"
 [[ -f "$S" ]] || S=/work/scripts/install.sh   # inside the local test container the checks sit in /t
 T=$(mktemp -d); mkdir -p $T/bin $T/web $T/nginx $T/psa $T/opt $T/opt2 $T/again $T/again2
@@ -19,7 +19,8 @@ X
 printf '#!/bin/bash\necho "Mem: ${RAM:-3900} 1000"\n' > $T/bin/free
 printf '#!/bin/bash\necho header\necho "/dev/sda1 80G 30G ${DISKFREE:-50}G 38%% /"\n' > $T/bin/df
 printf '#!/bin/bash\nexit 0\n' > $T/web/nginx
-printf '#!/bin/bash\nexit 0\n' > $T/bin/docker
+# Docker names the ports its own proxy publishes (asked on a second run)
+printf '#!/bin/bash\n[[ "$1 $2" == "port dbbkp-traefik" && -n "$OWNPROXY" ]] && printf "80/tcp -> 0.0.0.0:80\\n443/tcp -> 0.0.0.0:443\\n"\nexit 0\n' > $T/bin/docker
 chmod +x $T/bin/* $T/web/*
 printf 'server {\n  server_name shop.example.com www.shop.example.com;\n}\nserver {\n  server_name _;\n}\n' > $T/nginx/shop
 { echo 'set -Eeo pipefail'
