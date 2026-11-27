@@ -421,6 +421,7 @@ These scripts belong to the installer layout (`/opt/dbbkp`):
 | `scripts/uninstall.sh` | Removes the platform. You choose whether to keep the data. |
 | `scripts/install-scan.sh` | Installs or updates the server watch. `--no-actions` installs the scan only; `--remove` turns it off. |
 | `scripts/dbbkp.sh` | The `dbbkp` command-line tool for database backups |
+| `scripts/install-dk.sh` | Builds and installs `dk`, the Deploy King assistant for the terminal (`apps/cli`): `dk login` with a token from **AI agents › New token**, set `ANTHROPIC_API_KEY`, then `dk` and ask in plain words, for example `deploy ./shop-api.zip as shop-api` |
 
 After pulling new code, always run `pnpm db:migrate`, with `.env` loaded into the shell as above. The migrations are in `packages/db/drizzle`.
 
@@ -433,8 +434,10 @@ After pulling new code, always run `pnpm db:migrate`, with `.env` loaded into th
 | `apps/panel` | The web panel (Next.js 15) |
 | `apps/api` | The API (Express, tRPC), the MCP server for AI agents, and the WebSocket gateway |
 | `apps/worker` | Background jobs (BullMQ): deploys, workers, scheduled jobs, workflows, pipelines |
+| `apps/cli` | `dk`, the Deploy King assistant in the terminal (one bundled file) |
 | `apps/web` | An older interface, no longer used |
 | `packages/db` | Database schema and migrations (Drizzle, PostgreSQL) |
+| `packages/assistant` | The AI assistant behind `dk` and the desktop app: the agent loop on the Anthropic Messages API, its tools over the Deploy King API |
 | `packages/audit`, `packages/security`, `packages/utils`, … | Shared code: the audit log, encryption, helpers |
 | `packages/agent` | A Go agent that reports from servers |
 | `scripts/` | The installer, the server scan (`host-scan.py`) and its action helper (`host-act.py`), maintenance scripts |

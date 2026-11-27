@@ -1,0 +1,23 @@
+{
+  "name": "@dbbkp/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "dk": "dist/dk.mjs"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts",
+    "dev": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@dbbkp/assistant": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.0",
+    "esbuild": "^0.19.12",
+    "typescript": "^5.2.2"
+  }
+}
