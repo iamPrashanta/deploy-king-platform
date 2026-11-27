@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+import { toast } from "sonner";
 import { trpc } from "@/utils/trpc";
 import { Crown } from "@/components/shell/Shell";
 import { ThemeSwitch } from "@/components/theme";
@@ -25,7 +26,7 @@ function LoginForm() {
 
   const signedIn = (data: any) => {
     localStorage.setItem("token", data.token);
-    if (data.recoveryLeft !== undefined && data.recoveryLeft <= 2) sessionStorage.setItem("dk.recoveryLow", String(data.recoveryLeft));
+    if (recovery && typeof data.recoveryLeft === "number") toast.warning(`${data.recoveryLeft} recovery code${data.recoveryLeft === 1 ? "" : "s"} left. Make new ones in Settings › Sign-in.`);
     router.push(data.user?.mustChangePassword ? "/setup/password" : "/");
   };
   const login = trpc.auth.login.useMutation({
