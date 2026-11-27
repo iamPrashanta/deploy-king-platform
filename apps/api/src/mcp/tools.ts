@@ -260,14 +260,14 @@ export const TOOLS: Tool[] = [
   {
     name: "platform_status",
     title: "Platform status",
-    description: "Deploy King version, the domain apps get, and counts of apps, deploys today and workflows.",
+    description: "Deploy King version, the domain apps get, counts of apps, deploys today and workflows, and who the token acts as.",
     scope: "read",
     inputSchema: obj({}),
     annotations: { readOnlyHint: true },
     run: async (_a, t) => {
       const [info, overview] = await Promise.all([t.caller.system.info(), t.caller.system.overview()]);
       const o: any = overview;
-      return { version: info.version, appsGet: `<name>.${info.baseDomain}`, https: info.tls, apps: o.apps, deploysToday: o.deploysToday, workflows: o.workflows };
+      return { version: info.version, appsGet: `<name>.${info.baseDomain}`, https: info.tls, apps: o.apps, deploysToday: o.deploysToday, workflows: o.workflows, you: { username: t.user.username, role: t.user.role } };
     },
   },
   {

@@ -350,7 +350,11 @@ export class DkConversation implements AssistantConversation {
   /** Drops the oldest exchanges when the history gets long; it always restarts at a message the user typed. */
   private trimHistory() {
     if (this.messages.length <= MAX_MESSAGES) return;
-    const start = this.messages.findIndex((m, i) => i >= this.messages.length - MAX_MESSAGES && m.role === "user" && m.content.some((b) => b.type === "text"));
+    // Not a message that also carries tool results (after a failed model call text is added to one): their
+    // tool_use blocks would be cut off, and the API refuses a tool_result without its tool_use.
+    const start = this.messages.findIndex(
+      (m, i) => i >= this.messages.length - MAX_MESSAGES && m.role === "user" && m.content.some((b) => b.type === "text") && !m.content.some((b) => b.type === "tool_result")
+    );
     if (start > 0) this.messages = this.messages.slice(start);
   }
 

@@ -70,7 +70,8 @@ export function checkProject(filePath: string) {
   if (!isDir && !isZip(filePath)) throw new ProjectError("Only ZIP files and folders can be checked and deployed");
   const tmp = isDir ? null : unpack(filePath);
   try {
-    const root = isDir ? filePath : projectRoot(tmp!);
+    // A folder holding one folder is unwrapped like a ZIP is (the server does the same with the upload).
+    const root = projectRoot(isDir ? filePath : tmp!);
     const r = analyzeProject(root);
     const folders = (() => {
       try {
@@ -109,12 +110,34 @@ export function checkProject(filePath: string) {
 }
 
 /** Only the last one is kept: plans are shown and run right after each other, and ZIPs can be big. */
-let last: { path: string; mtimeMs: number; prepared: PreparedUpload } | null = null;
+let last: { path: string; stamp: string; prepared: PreparedUpload } | null = null;
+
+/**
+ * What the upload of a path is made of: size and time of the ZIP, or of every file in the folder (a folder's
+ * own time does not change when a file inside it is edited). Cheap next to zipping it again.
+ */
+function stampOf(filePath: string, st: fs.Stats): string {
+  if (!st.isDirectory()) return `${st.size}:${st.mtimeMs}`;
+  const h = crypto.createHash("sha1");
+  const walk = (dir: string, rel: string) => {
+    for (const name of fs.readdirSync(dir).sort()) {
+      if (SKIP.has(name)) continue;
+      const full = path.join(dir, name);
+      const s = fs.lstatSync(full);
+      if (s.isSymbolicLink()) continue;
+      if (s.isDirectory()) walk(full, `${rel}${name}/`);
+      else if (s.isFile()) h.update(`${rel}${name}\0${s.size}\0${s.mtimeMs}\n`);
+    }
+  };
+  walk(filePath, "");
+  return h.digest("hex");
+}
 
 /** The bytes to upload: the ZIP as it is, or a folder zipped without node_modules, .git and build caches. */
 export function prepareUpload(filePath: string): PreparedUpload {
   const st = fs.statSync(filePath);
-  if (last && last.path === filePath && last.mtimeMs === st.mtimeMs) return last.prepared;
+  const stamp = stampOf(filePath, st);
+  if (last && last.path === filePath && last.stamp === stamp) return last.prepared;
   let zip: Uint8Array;
   if (st.isDirectory()) {
     const z = new AdmZip();
@@ -136,7 +159,7 @@ export function prepareUpload(filePath: string): PreparedUpload {
     zip = fs.readFileSync(filePath);
   }
   const prepared = { zip, bytes: zip.byteLength, sha256: crypto.createHash("sha256").update(zip).digest("hex") };
-  last = { path: filePath, mtimeMs: st.mtimeMs, prepared };
+  last = { path: filePath, stamp, prepared };
   return prepared;
 }
 

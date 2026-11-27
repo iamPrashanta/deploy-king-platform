@@ -110,3 +110,18 @@ test("every tool has a schema, and every change tool says what it is in a plan",
     assert.ok(t.step({ app: "a", name: "a", file: "x", set: {}, steps: [] }, { attachments: new Map() }).length > 0, t.name);
   }
 });
+
+test("a folder's upload follows edits to files inside it; a folder holding one folder is checked like its ZIP", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dk-test-"));
+  fs.mkdirSync(path.join(dir, "site", "css"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "site", "index.html"), "<h1>one</h1>");
+  fs.writeFileSync(path.join(dir, "site", "css", "a.css"), "h1{}");
+  const first = prepareUpload(dir).sha256;
+  assert.equal(prepareUpload(dir).sha256, first, "unchanged: the same bytes");
+  // Same folder entries, so the folders' own times stay; only the file changed.
+  fs.writeFileSync(path.join(dir, "site", "css", "a.css"), "h1{color:red}");
+  fs.utimesSync(path.join(dir, "site", "css", "a.css"), new Date(), new Date(Date.now() + 5000));
+  assert.notEqual(prepareUpload(dir).sha256, first, "an edited file inside is uploaded as it is now");
+  assert.equal(checkProject(dir).framework, checkProject(path.join(dir, "site")).framework);
+  assert.match(String(checkProject(dir).summary ?? checkProject(dir).framework), /static/i);
+});
