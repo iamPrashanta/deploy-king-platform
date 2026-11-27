@@ -7,6 +7,7 @@ import "./hosting.worker";
 import "./database.worker";
 import "./cron.worker";
 import "./automation.worker";
+import "./heartbeat";
 
 const scriptPath = resolveScriptPath("dbbkp.sh");
 

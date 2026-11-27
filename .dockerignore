@@ -1,0 +1,16 @@
+# Build context for apps/{api,worker,panel}/Dockerfile (the repository root).
+**/node_modules
+**/.next
+**/.turbo
+**/dist
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+data
+deploy/.env
+tests
+legal
+*.log
