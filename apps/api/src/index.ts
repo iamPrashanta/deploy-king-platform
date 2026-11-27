@@ -22,6 +22,7 @@ import webhooksRouter from "./routes/webhooks";
 import hooksRouter from "./routes/hooks";
 import mcpRouter from "./routes/mcp";
 import { llmsTxt } from "./routes/llms";
+import { mountDesktop } from "./routes/desktop"; // desktop agent: Deploy King Desktop key (DESKTOP_MODE only)
 import { syncAllSchedules } from "./services/automations";
 import securityRouter from "./routes/security";
 import nodesRouter, { sweepOfflineNodes, pruneOldMetrics } from "./routes/nodes";
@@ -48,6 +49,7 @@ app.use(morgan("dev", {
 }));
 
 // ─── REST Auth (legacy support) ─────────────────────────────
+mountDesktop(app); // before /api/auth: closes register on desktop machines
 app.use("/api/auth", authRouter);
 app.use("/api/sites", requireAuth, sitesRouter);
 app.use("/webhooks", webhooksRouter);
