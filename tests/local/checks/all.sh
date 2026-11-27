@@ -15,14 +15,13 @@ echo "=== scheduleunit.ts"
 (cd /work/apps/api && npx tsx /t/scheduleunit.ts 2>&1 | grep -E "PASS|FAIL")
 echo "=== teamunit.ts"
 (cd /work/apps/api && npx tsx /t/teamunit.ts 2>&1 | grep -E "PASS|FAIL")
-for t in teamflow.ts accessflow.ts cleanapi.ts watchflow.ts actflow.ts jobsflow.ts assistantflow.ts sshflow.ts desktopflow.ts; do
+for t in teamflow.ts accessflow.ts cleanapi.ts watchflow.ts actflow.ts jobsflow.ts assistantflow.ts sshflow.ts desktopflow.ts securityflow.ts; do
   echo "=== $t"
   bash /t/freshdb.sh $t
 done
-for t in capacity.mjs fitui.mjs crashloop.mjs rootdir.mjs wf3.mjs rootui.mjs wf.mjs wf2.mjs "mcp.mjs http://localhost:3000" mcp2.mjs agents.mjs serversui.mjs; do
 echo "=== dataflow.ts"
 if command -v pg_dump >/dev/null; then DK_PG_ADMIN_URL=postgres://postgres:postgres@dbbkp-check-pg:5432/postgres bash /t/freshdb.sh dataflow.ts; else echo "NOTE  pg_dump is not in this container; run it on the host: PG=postgres://... bash tests/local/checks/datalocal.sh dataflow.ts"; fi
-for t in capacity.mjs fitui.mjs crashloop.mjs rootdir.mjs wf3.mjs rootui.mjs wf.mjs wf2.mjs "mcp.mjs http://localhost:3000" mcp2.mjs agents.mjs; do
+for t in capacity.mjs fitui.mjs crashloop.mjs rootdir.mjs wf3.mjs rootui.mjs wf.mjs wf2.mjs "mcp.mjs http://localhost:3000" mcp2.mjs agents.mjs serversui.mjs; do
   echo "=== $t"
   timeout 900 node /t/$t 2>&1 | grep -E "PASS|FAIL|NOTE|ERRORS|error|pageerror" | cut -c1-170
 done
