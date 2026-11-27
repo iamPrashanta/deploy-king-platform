@@ -196,3 +196,29 @@ test("deploying a ZIP from the prompt: attached, checked here, uploaded after ap
   assert.deepEqual(JSON.parse(fs.readFileSync(cfg, "utf8")).trustedApps, { [dk.url]: ["site"] });
   assert.ok(dk.calls.some((c) => c.name === "deploy_app"));
 });
+
+test("a deploy that stops on a question asks in the terminal and sends the choice to the deploy engine", async (t) => {
+  let waits = 0;
+  const dk = await fakeDeployKing({
+    platform_status: () => ({ version: "0.4.0" }),
+    list_apps: () => ({ count: 1, apps: [{ name: "shop.localhost", status: "provisioning", url: "http://shop.localhost" }] }),
+    wait_for_deploy: () =>
+      ++waits === 1
+        ? { app: "shop.localhost", url: "http://shop.localhost", result: "needs_answer", deployment: { id: "d1", status: "waiting_input", question: { question: "Which port does the app listen on?", detail: "server.js listens on 3000; the Dockerfile says 8080.", answers: [{ answer: "3000", label: "3000 (server.js)" }, { answer: "8080", label: "8080 (Dockerfile)" }] } } }
+        : { app: "shop.localhost", url: "http://shop.localhost", result: "live" },
+    answer_deploy_question: (a) => ({ app: a.app, answered: a.answer }),
+  });
+  t.after(() => dk.close());
+  const ai = await fakeAnthropic([[{ type: "tool_use", name: "wait_for_deploy", input: { app: "shop" } }], [{ type: "text", text: "shop is live." }]]);
+  t.after(() => ai.close());
+  const dir = tmp();
+  const r = await run([], ["how is the shop deploy going?", "2", "/quit", ""].join("\n"), { DK_CONFIG: path.join(dir, "c.json"), HOME: dir, DK_API_URL: dk.url, DK_TOKEN: TOKEN, ANTHROPIC_API_KEY: FAKE_KEY, ANTHROPIC_BASE_URL: ai.url });
+  const o = r.out;
+  assert.equal(r.code, 0, o);
+  assert.match(o, /server\.js listens on 3000; the Dockerfile says 8080\./);
+  assert.match(o, /\? shop\.localhost: Which port does the app listen on\?\n\s+1\. 3000 \(server\.js\)\n\s+2\. 8080 \(Dockerfile\)\n\s+3\. Type an answer/);
+  assert.deepEqual(dk.calls.find((c) => c.name === "answer_deploy_question")!.args, { app: "shop.localhost", answer: "8080" });
+  assert.match(o, /● live at http:\/\/shop\.localhost/);
+  assert.doesNotMatch(o, /Apply this plan\?/, "following a deploy is a read: no plan");
+  assert.match(o, /shop is live\./);
+});
