@@ -35,7 +35,7 @@ async function main() {
   const PW = "Deploy-Check-Passw0rd";
   const sh = (...a: string[]) => execFileSync(engine, a, { encoding: "utf8" });
   const inC = (cmd: string) => sh("exec", C, "sh", "-c", cmd);
-  try { sh("rm", "-f", C); } catch {}
+  try { sh("rm", "-f", "-v", C); } catch {}
   const sshPort = 20000 + Math.floor(Math.random() * 20000);
   sh("run", "-d", "--name", C, "-e", "PUID=1000", "-e", "PGID=1000", "-e", "USER_NAME=deploy", "-e", `USER_PASSWORD=${PW}`, "-e", "PASSWORD_ACCESS=true", "-e", "SUDO_ACCESS=true", "-p", `127.0.0.1:${sshPort}:2222`, process.env.SSH_TEST_IMAGE || "lscr.io/linuxserver/openssh-server:latest");
   const starts = () => { try { return (sh("logs", C).match(/listening on port 2222/g) ?? []).length; } catch { return 0; } };
@@ -298,7 +298,7 @@ async function main() {
     failed++;
     console.log("CRASH " + (e?.stack ?? e));
   } finally {
-    try { sh("rm", "-f", C); } catch {}
+    try { sh("rm", "-f", "-v", C); } catch {}
     server?.close();
     fs.rmSync(recDir, { recursive: true, force: true });
   }
