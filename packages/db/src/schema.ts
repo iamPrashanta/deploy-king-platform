@@ -959,3 +959,107 @@ export type Entity = typeof entities.$inferSelect;
 export type EntityRelation = typeof entityRelations.$inferSelect;
 export type Workflow = typeof workflows.$inferSelect;
 export type WorkflowStep = typeof workflowSteps.$inferSelect;
+
+// ─── SERVERS & SSH (servers agent) ───────────────────────────────────────────
+// Other servers this panel signs in to over SSH. Admins only. Private keys and stored passwords are
+// encrypted with MASTER_KEY (AES-256-GCM, @dbbkp/security) and never leave the API.
+
+export type SshAccessRules = {
+  adminsOnly: boolean; // only admins can open a terminal
+  askPassword: boolean; // ask for the panel password before a terminal opens
+  record: boolean; // record terminal sessions (kept 30 days)
+  idleMinutes: number; // close idle sessions after this many minutes; 0 = never
+  allowAutomation: boolean; // workflows and AI agents may run commands (each still needs approval)
+};
+
+export type SshSystemInfo = {
+  os?: string;
+  cpus?: number;
+  memoryMb?: number;
+  memoryUsedMb?: number;
+  diskTotalGb?: number;
+  diskFreeGb?: number;
+  uptimeSec?: number;
+  load?: number;
+  cpuPct?: number;
+  docker?: string | null;
+  passwordAuth?: boolean | null; // the server still offers password sign-in
+  sudo?: "root" | "nopass" | "pass" | "none";
+  latencyMs?: number;
+  seenFrom?: string; // the address this panel connects from, as the server sees it
+  checkedAt?: string;
+};
+
+export const sshKeys = pgTable("ssh_keys", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  label: varchar("label", { length: 120 }).notNull(),
+  type: varchar("type", { length: 20 }).notNull(), // ed25519 | rsa4096 | ecdsa
+  publicKey: text("public_key").notNull(), // one OpenSSH line: "<algo> <base64> <comment>"
+  fingerprint: varchar("fingerprint", { length: 100 }).notNull(), // SHA256:...
+  encryptedPrivateKey: text("encrypted_private_key").notNull(),
+  iv: varchar("iv", { length: 64 }).notNull(),
+  authTag: varchar("auth_tag", { length: 64 }).notNull(),
+  hasPassphrase: boolean("has_passphrase").notNull().default(false),
+  imported: boolean("imported").notNull().default(false),
+  fromAddress: varchar("from_address", { length: 255 }), // from="..." lock; null = usable from anywhere
+  restrict: boolean("restrict").notNull().default(true), // no port, agent or X11 forwarding
+  rotateAfterDays: integer("rotate_after_days"), // null = never remind
+  rotatedFromId: uuid("rotated_from_id"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  lastUsedAt: timestamp("last_used_at"),
+});
+
+export const sshServers = pgTable("ssh_servers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: varchar("name", { length: 80 }).notNull().unique(),
+  host: varchar("host", { length: 255 }).notNull(),
+  port: integer("port").notNull().default(22),
+  username: varchar("username", { length: 64 }).notNull(),
+  authMethod: varchar("auth_method", { length: 20 }).notNull().default("key"), // key | password-once | password
+  keyId: uuid("key_id").references(() => sshKeys.id, { onDelete: "set null" }),
+  // Only for "password every time".
+  encryptedPassword: text("encrypted_password"),
+  passwordIv: varchar("password_iv", { length: 64 }),
+  passwordAuthTag: varchar("password_auth_tag", { length: 64 }),
+  // Trust on first use: what the server showed the first time, and what the admin confirmed.
+  seenHostKeyType: varchar("seen_host_key_type", { length: 40 }),
+  seenHostKeyFingerprint: varchar("seen_host_key_fingerprint", { length: 100 }),
+  hostKeyType: varchar("host_key_type", { length: 40 }),
+  hostKeyFingerprint: varchar("host_key_fingerprint", { length: 100 }),
+  hostKeyTrustedAt: timestamp("host_key_trusted_at"),
+  rules: jsonb("rules").$type<SshAccessRules>().notNull(),
+  // waiting_key | waiting_trust | connected | unreachable | auth_failed | host_key_changed
+  status: varchar("status", { length: 30 }).notNull().default("waiting_key"),
+  statusNote: text("status_note"),
+  system: jsonb("system").$type<SshSystemInfo>().notNull().default({}),
+  timeoutSec: integer("timeout_sec").notNull().default(10),
+  jumpServerId: uuid("jump_server_id"),
+  setupDone: boolean("setup_done").notNull().default(false),
+  lastCheckAt: timestamp("last_check_at"),
+  lastUsedAt: timestamp("last_used_at"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// One row per terminal opened on a server. The recording (asciicast v2, output only) is a file on disk, kept 30 days.
+export const sshSessions = pgTable("ssh_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  serverId: uuid("server_id").notNull().references(() => sshServers.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+  actor: varchar("actor", { length: 120 }).notNull(), // who, in words: a username or "Workflow: nightly check"
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  endedAt: timestamp("ended_at"),
+  endReason: varchar("end_reason", { length: 60 }), // ended | idle | disconnected | server-closed | error
+  commands: integer("commands").notNull().default(0),
+  recordingPath: text("recording_path"),
+  recordingBytes: bigint("recording_bytes", { mode: "number" }).notNull().default(0),
+  ip: varchar("ip", { length: 64 }),
+}, (t) => ({
+  byServer: index("ssh_sessions_server").on(t.serverId, t.startedAt),
+}));
+
+export type SshKey = typeof sshKeys.$inferSelect;
+export type SshServer = typeof sshServers.$inferSelect;
+export type SshSession = typeof sshSessions.$inferSelect;

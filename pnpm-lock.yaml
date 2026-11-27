@@ -101,6 +101,9 @@ importers:
       postgres:
         specifier: ^3.4.4
         version: 3.4.9
+      ssh2:
+        specifier: ^1.17.0
+        version: 1.17.0
       tar:
         specifier: ^6.2.1
         version: 6.2.1
@@ -141,6 +144,9 @@ importers:
       '@types/node':
         specifier: ^20.8.0
         version: 20.19.43
+      '@types/ssh2':
+        specifier: ^1.15.6
+        version: 1.15.6
       '@types/tar':
         specifier: ^6.1.13
         version: 6.1.13
