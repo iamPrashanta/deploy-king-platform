@@ -13,7 +13,7 @@ import { Dialog, Empty, PageHeader, Skeleton, Spinner, copyText, cx, errMsg, tim
  */
 
 type Role = "admin" | "developer" | "viewer";
-type Grants = { createApps?: boolean; deleteApps?: boolean; terminal?: boolean; agentTokens?: boolean };
+type Grants = { createApps?: boolean; deleteApps?: boolean; terminal?: boolean; agentTokens?: boolean; restoreBackups?: boolean };
 type Access = { role: Role; allApps: boolean; siteIds: string[]; grants: Grants };
 
 const ROLES: Array<{ v: Role; label: string; text: string }> = [
@@ -26,6 +26,7 @@ const EXTRAS: Array<{ k: keyof Grants; label: string; text: string }> = [
   { k: "deleteApps", label: "Delete apps", text: "Deleting also removes the app's storage." },
   { k: "terminal", label: "Open a terminal inside their apps", text: "Runs commands in the app's own container, not on the server." },
   { k: "agentTokens", label: "Create AI agent tokens", text: "A token can never do more than the member who made it." },
+  { k: "restoreBackups", label: "Restore backups", text: "Into a new copy or over live data of their apps. Making backups needs no extra." },
 ];
 const ROLE_LABEL: Record<string, string> = { owner: "Owner", admin: "Admin", developer: "Developer", viewer: "Viewer", member: "Member" };
 const ROLE_TONE: Record<string, string> = { owner: "purple", admin: "info", developer: "", viewer: "", member: "" };

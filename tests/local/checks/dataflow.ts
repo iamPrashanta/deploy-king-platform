@@ -309,6 +309,11 @@ async function main() {
   const restores: any[] = await dev.backup.restores();
   pass(restores.length >= 5 && (await code(dev.backup.restoreStatus({ id: restores[0].id }))) === "OK", "restores can be followed step by step");
 
+  // ── the extra is given on the Team page ──
+  await owner.team.updateMember({ id: devRow.id, role: "developer", allApps: false, siteIds: [A.id], grants: { restoreBackups: true } });
+  const devNow = await as((await db.select().from(users).where(eq(users.id, devRow.id)))[0]);
+  pass(((await devNow.team.me()) as any).can.includes("backup.restore"), "an admin can give a developer the Restore backups extra");
+
   // ── clean up ──
   for (const name of made) await B.psql(su, `DROP DATABASE IF EXISTS ${B.ident(name)} WITH (FORCE)`).catch(() => {});
   await B.psql(su, `DROP ROLE IF EXISTS dkchk_app`).catch(() => {});

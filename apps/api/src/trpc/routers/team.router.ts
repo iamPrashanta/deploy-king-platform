@@ -8,7 +8,7 @@ import { router, adminProcedure, protectedProcedure, publicProcedure, type Conte
 import { TEAM_ROLES, cleanGrants, hashInviteToken, issueSession, manageProblem, memberPermissions, newInviteToken, ownerId, type MemberGrants, type TeamRole } from "../../services/team";
 
 const INVITE_DAYS = [1, 3, 7, 14] as const;
-const grantsInput = z.object({ createApps: z.boolean().optional(), deleteApps: z.boolean().optional(), terminal: z.boolean().optional(), agentTokens: z.boolean().optional() }).default({});
+const grantsInput = z.object({ createApps: z.boolean().optional(), deleteApps: z.boolean().optional(), terminal: z.boolean().optional(), agentTokens: z.boolean().optional(), restoreBackups: z.boolean().optional() }).default({});
 const accessInput = z.object({
   role: z.enum(TEAM_ROLES),
   allApps: z.boolean(),
