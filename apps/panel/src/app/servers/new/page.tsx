@@ -3,11 +3,12 @@
 import Link from "next/link";
 import React, { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, ArrowRight, CheckCircle2, Download, Info, KeyRound, Lock, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, Download, Info, KeyRound, Lock, RefreshCw, Server, ShieldCheck, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/utils/trpc";
 import { useCrumbs } from "@/components/shell/Shell";
-import { Code, CopyButton, Spinner, cx, errMsg } from "@/components/ui";
+import { useAuth } from "@/components/AuthProvider";
+import { Code, CopyButton, Empty, Spinner, cx, errMsg } from "@/components/ui";
 import { Rule, RulesEditor, TYPE_LABEL, WizardSteps, type Rules } from "@/components/servers/common";
 import { TestResults } from "@/components/servers/Checks";
 
@@ -429,6 +430,11 @@ function Wizard() {
   const s = server.data as any;
   useCrumbs([{ label: "Servers", href: "/servers" }, { label: s ? `Add server: ${s.name}` : "Add server" }]);
   const title = step === 1 ? "Add server: connection" : step === 2 ? "Add server: SSH key" : "Add server: verify";
+  const { user } = useAuth();
+  // The API refuses every step for non-admins; say so instead of showing a form that cannot be saved (as /servers does).
+  if (user && user.role !== "admin") {
+    return <div className="page"><Empty icon={<Server size={20} />} title="Servers are managed by admins">Ask an admin if you need a terminal on one of them.</Empty></div>;
+  }
   return (
     <div className="page" style={{ maxWidth: 1200 }}>
       <div className="ph"><div className="grow"><h1>{title}</h1></div></div>
