@@ -15,7 +15,7 @@ echo "=== scheduleunit.ts"
 (cd /work/apps/api && npx tsx /t/scheduleunit.ts 2>&1 | grep -E "PASS|FAIL")
 echo "=== teamunit.ts"
 (cd /work/apps/api && npx tsx /t/teamunit.ts 2>&1 | grep -E "PASS|FAIL")
-for t in teamflow.ts accessflow.ts cleanapi.ts watchflow.ts actflow.ts jobsflow.ts; do
+for t in teamflow.ts accessflow.ts cleanapi.ts watchflow.ts actflow.ts jobsflow.ts assistantflow.ts; do
   echo "=== $t"
   bash /t/freshdb.sh $t
 done

@@ -65,13 +65,14 @@ Apps deployed during a check are extra containers on the same network. The check
 | `accessflow.ts` | Who may reach what outside the apps pages: files, scheduled jobs, databases, backups, servers, pipelines, the audit log, and the closed registration route |
 | `cleanunit.ts`, `cleanapi.ts` | Cleanup through the API (who may do what, the setting, the run record), and on fixed inputs: what may be removed, what needs a typed name, what an automatic run leaves alone, and when one is due |
 | `installcheck.sh` | The installer on made-up servers: fresh, with a web server, with another control panel, too small, no terminal. Needs only bash: `bash tests/local/checks/installcheck.sh` |
-| `freshdb.sh` | Not a check: runs one that needs an empty database (`teamflow.ts`, `accessflow.ts`, `cleanapi.ts`, `watchflow.ts`, `actflow.ts`, `jobsflow.ts`) in a database of its own, then drops it |
+| `freshdb.sh` | Not a check: runs one that needs an empty database (`teamflow.ts`, `accessflow.ts`, `cleanapi.ts`, `watchflow.ts`, `actflow.ts`, `jobsflow.ts`, `assistantflow.ts`) in a database of its own, then drops it |
 | `hostscan_check.py` | The host scan (`scripts/host-scan.py`) on a made-up server: what it finds, and that no secret ends up in the report. Needs only Python: `python3 tests/local/checks/hostscan_check.py` |
 | `hostact_check.py` | The action helper (`scripts/host-act.py`) on a made-up server, commands recorded instead of run: every action, its undo, and what it refuses. Needs only Python |
 | `actflow.ts` | Remove and Undo end to end: finding, request, the real helper, result, undo |
 | `watchunit.ts`, `watchflow.ts` | The server watch: what counts as new or changed and how urgent it is, on fixed inputs; then from report file to answered finding through the API |
 | `scheduleunit.ts` | Cron text, schedules in words, next runs in different time zones |
 | `jobsflow.ts` | Scheduled jobs and workers through the API (queues replaced by in-memory stand-ins): permissions, scheduling, pausing, run now, start-up sync, workers and the memory ledger, failed and skipped runs, Needs attention |
+| `assistantflow.ts` | The assistant (`dk`, the desktop app) against the API: the MCP tools for scheduled jobs, workers and databases, `set_env` with `replaceAll`, the ZIP upload for agent tokens (`/mcp/upload`), and one whole `@dbbkp/assistant` conversation with a scripted model that deploys a folder. No AI is called. The assistant's own tests: `pnpm --filter @dbbkp/assistant test` and `pnpm --filter @dbbkp/cli test` (the `dk` bundle against a fake API and a fake Messages API on localhost) |
 | `crashloop.mjs` | Crash-loop watcher, Overview "Needs attention", the "keeps crashing" trigger |
 | `rootdir.mjs`, `rootui.mjs` | Root directory (monorepos) and build-time variables, API and browser |
 | `wf.mjs`, `wf2.mjs` | Workflow editor in the browser; webhook, deploy and deploy-step triggers |
