@@ -6,7 +6,7 @@ import { cx } from "@/components/ui";
 /** Team access: the role, apps and extras editor and the "will / will not be able to" summary. Used by Team and by one member's page. */
 
 export type Role = "admin" | "developer" | "viewer";
-export type Grants = { createApps?: boolean; deleteApps?: boolean; terminal?: boolean; agentTokens?: boolean };
+export type Grants = { createApps?: boolean; deleteApps?: boolean; terminal?: boolean; agentTokens?: boolean; restoreBackups?: boolean };
 export type Access = { role: Role; allApps: boolean; siteIds: string[]; grants: Grants };
 
 export const ROLES: Array<{ v: Role; label: string; text: string }> = [
@@ -19,6 +19,7 @@ export const EXTRAS: Array<{ k: keyof Grants; label: string; text: string }> = [
   { k: "deleteApps", label: "Delete apps", text: "Deleting also removes the app's storage." },
   { k: "terminal", label: "Open a terminal inside their apps", text: "Runs commands in the app's own container, not on the server." },
   { k: "agentTokens", label: "Create AI agent tokens", text: "A token can never do more than the member who made it." },
+  { k: "restoreBackups", label: "Restore backups", text: "Into a new copy or over live data of their apps. Making backups needs no extra." },
 ];
 export const ROLE_LABEL: Record<string, string> = { owner: "Owner", admin: "Admin", developer: "Developer", viewer: "Viewer", member: "Member" };
 export const ROLE_TONE: Record<string, string> = { owner: "purple", admin: "info", developer: "", viewer: "", member: "" };

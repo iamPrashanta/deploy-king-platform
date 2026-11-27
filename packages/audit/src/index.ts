@@ -81,7 +81,16 @@ export type AuditAction =
   | "alert_test"
   | "github_app_create"
   | "github_app_install"
-  | "github_app_remove";
+  | "github_app_remove"
+  // data agent: databases, backups, restores, files
+  | "db_connect"
+  | "backup_run"
+  | "backup_restore"
+  | "backup_policy"
+  | "backup_destination"
+  | "file_upload"
+  | "file_delete"
+  | "folder_create";
 
 export interface AuditContext {
   /** UUID of the user performing the action */

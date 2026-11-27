@@ -1115,3 +1115,97 @@ export const githubAppInstallations = pgTable("github_app_installations", {
 export type UserTwoFactor = typeof userTwoFactor.$inferSelect;
 export type AlertState = typeof alertState.$inferSelect;
 export type GithubAppInstallation = typeof githubAppInstallations.$inferSelect;
+// ─── DATA (agent: data) ──────────────────────────────────────────────────────
+// Databases, backups, schedules, destinations and restores (panel section 6: Data).
+// A PostgreSQL database Deploy King did not create, connected by URL ("Connect existing").
+// The URL is encrypted with MASTER_KEY; the panel only ever shows it with the password hidden.
+export const dbConnections = pgTable("db_connections", {
+  dbInstanceId: uuid("db_instance_id").primaryKey().references(() => dbInstances.id, { onDelete: "cascade" }),
+  port: integer("port").notNull().default(5432),
+  database: varchar("database", { length: 100 }).notNull(),
+  encryptedUrl: text("encrypted_url").notNull(),
+// Where backup files are copied. "This server" (kind local) is made by Deploy King and cannot be removed.
+export const backupDestinations = pgTable("backup_destinations", {
+  name: varchar("name", { length: 100 }).notNull(),
+  // local (a folder on this server) | rclone (any rclone remote: S3, Google Drive, SFTP, ...)
+  kind: varchar("kind", { length: 20 }).notNull(),
+  /** An absolute folder for local, "remote:path" for rclone. */
+  location: text("location").notNull(),
+  /** Keep only this many backups of each database or volume here. null: follow each schedule's "keep". */
+  keepLast: integer("keep_last"),
+  builtIn: boolean("built_in").notNull().default(false),
+  lastCheckOk: boolean("last_check_ok"),
+  lastCheckMessage: text("last_check_message"),
+// The backup schedule of one database or one app volume. target_key: "db:<id>" or "vol:<siteId>:<volume>".
+export const backupPolicies = pgTable("backup_policies", {
+  targetKey: varchar("target_key", { length: 200 }).notNull().unique(),
+  targetType: varchar("target_type", { length: 12 }).notNull(), // database | volume
+  dbInstanceId: uuid("db_instance_id").references(() => dbInstances.id, { onDelete: "cascade" }),
+  siteId: uuid("site_id").references(() => sites.id, { onDelete: "cascade" }),
+  volumeName: varchar("volume_name", { length: 60 }),
+  schedule: varchar("schedule", { length: 100 }).notNull(),
+  timezone: varchar("timezone", { length: 64 }).notNull().default("UTC"),
+  keep: integer("keep").notNull().default(7),
+  destinationIds: jsonb("destination_ids").$type<string[]>().notNull().default([]),
+  enabled: boolean("enabled").notNull().default(true),
+export type BackupCopy = {
+  destinationId: string;
+  name: string;
+  kind: string;
+  /** Where the file is at that destination. */
+  location: string;
+  ok: boolean;
+  /** The SHA-256 of the copy was read back and matched. */
+  verified: boolean;
+  error?: string;
+  /** Removed by a "keep" rule. */
+  removedAt?: string;
+// One backup run: a database dump or a volume archive, its checksum and where it was copied.
+export const backups = pgTable("backups", {
+  targetKey: varchar("target_key", { length: 200 }).notNull(),
+  targetType: varchar("target_type", { length: 12 }).notNull(), // database | volume
+  dbInstanceId: uuid("db_instance_id").references(() => dbInstances.id, { onDelete: "set null" }),
+  siteId: uuid("site_id").references(() => sites.id, { onDelete: "set null" }),
+  volumeName: varchar("volume_name", { length: 60 }),
+  /** The database or volume name when the backup was made, so history reads well after it is gone. */
+  targetName: varchar("target_name", { length: 255 }).notNull(),
+  engine: varchar("engine", { length: 12 }).notNull(), // pgsql | mysql | files
+  trigger: varchar("trigger", { length: 12 }).notNull().default("manual"), // manual | schedule | safety | retry
+  // queued | running | ok | partial (some copies failed) | failed
+  status: varchar("status", { length: 12 }).notNull().default("queued"),
+  attempts: integer("attempts").notNull().default(0),
+  fileName: varchar("file_name", { length: 255 }),
+  sizeBytes: bigint("size_bytes", { mode: "number" }),
+  sha256: varchar("sha256", { length: 64 }),
+  durationMs: integer("duration_ms"),
+  error: text("error"),
+  copies: jsonb("copies").$type<BackupCopy[]>().notNull().default([]),
+  policyId: uuid("policy_id").references(() => backupPolicies.id, { onDelete: "set null" }),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+}, (t) => ({ byTarget: index("backups_target_idx").on(t.targetKey, t.createdAt) }));
+export type RestoreStep = { at: string; text: string; ok?: boolean };
+// One restore: which backup, how, into what, and what happened step by step.
+export const backupRestores = pgTable("backup_restores", {
+  backupId: uuid("backup_id").notNull().references(() => backups.id, { onDelete: "cascade" }),
+  targetKey: varchar("target_key", { length: 200 }).notNull(),
+  targetName: varchar("target_name", { length: 255 }).notNull(),
+  mode: varchar("mode", { length: 8 }).notNull(), // full | data
+  into: varchar("into", { length: 8 }).notNull(), // new | replace
+  /** The new database, or the folder inside the volume, for into = new. */
+  newName: varchar("new_name", { length: 100 }),
+  verifyChecksum: boolean("verify_checksum").notNull().default(true),
+  safetyBackup: boolean("safety_backup").notNull().default(true),
+  stopApp: boolean("stop_app").notNull().default(false),
+  safetyBackupId: uuid("safety_backup_id"),
+  status: varchar("status", { length: 12 }).notNull().default("queued"), // queued | running | ok | failed
+  steps: jsonb("steps").$type<RestoreStep[]>().notNull().default([]),
+  error: text("error"),
+  resultDbInstanceId: uuid("result_db_instance_id"),
+  finishedAt: timestamp("finished_at"),
+export type DbInstance = typeof dbInstances.$inferSelect;
+export type DbConnection = typeof dbConnections.$inferSelect;
+export type BackupDestination = typeof backupDestinations.$inferSelect;
+export type BackupPolicy = typeof backupPolicies.$inferSelect;
+export type Backup = typeof backups.$inferSelect;
+export type BackupRestore = typeof backupRestores.$inferSelect;

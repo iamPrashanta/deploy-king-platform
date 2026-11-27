@@ -6,10 +6,11 @@ async function main() {
   const perms = (r: any, g?: any) => [...memberPermissions(r, g)].sort().join(",");
 
   pass(perms("viewer", { createApps: true, deleteApps: true, terminal: true, agentTokens: true }) === "", "a viewer can do nothing, whatever extras are set");
-  pass(perms("developer") === "cron.create,site.deploy", "a developer deploys and schedules, nothing more", perms("developer"));
-  pass(perms("developer", { deleteApps: true }) === "cron.create,site.delete,site.deploy", "each extra adds exactly its own permission");
+  pass(perms("developer") === "backup.run,cron.create,site.deploy", "a developer deploys, schedules and backs up, nothing more", perms("developer"));
+  pass(perms("developer", { deleteApps: true }) === "backup.run,cron.create,site.delete,site.deploy", "each extra adds exactly its own permission");
   pass(perms("developer", { terminal: true }).includes("terminal.open") && perms("developer", { terminal: true }).includes("terminal.write"), "the terminal extra covers open and write");
-  pass(perms("developer", { createApps: true, agentTokens: true }) === "agent.tokens,cron.create,site.create,site.deploy", "create and agent tokens are separate extras");
+  pass(perms("developer", { createApps: true, agentTokens: true }) === "agent.tokens,backup.run,cron.create,site.create,site.deploy", "create and agent tokens are separate extras");
+  pass(perms("developer", { restoreBackups: true }).includes("backup.restore") && !perms("developer").includes("backup.restore") && perms("viewer", { restoreBackups: true }) === "", "restoring a backup is its own extra, and only for developers");
   pass(JSON.stringify(cleanGrants("developer", { createApps: true, deleteApps: false, evil: true } as any)) === '{"createApps":true}', "unknown or false extras are dropped");
   pass(JSON.stringify(cleanGrants("viewer", { createApps: true })) === "{}" && JSON.stringify(cleanGrants("admin", { terminal: true })) === "{}", "only developers carry extras");
 

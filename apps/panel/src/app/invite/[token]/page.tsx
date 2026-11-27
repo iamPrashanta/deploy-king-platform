@@ -16,7 +16,7 @@ const ROLE: Record<string, { label: string; can: string[]; cannot: string[] }> =
   developer: { label: "a Developer", can: ["Deploy and roll back your apps", "Add and replace variables", "Read logs and deploy history"], cannot: ["See servers, team or settings"] },
   viewer: { label: "a Viewer", can: ["See status, logs and deploy history"], cannot: ["Deploy, change or delete anything"] },
 };
-const EXTRA: Record<string, string> = { createApps: "Create apps", deleteApps: "Delete apps", terminal: "Open a terminal inside your apps", agentTokens: "Create AI agent tokens" };
+const EXTRA: Record<string, string> = { createApps: "Create apps", deleteApps: "Delete apps", terminal: "Open a terminal inside your apps", agentTokens: "Create AI agent tokens", restoreBackups: "Restore backups" };
 
 export default function AcceptInvitePage() {
   const { token } = useParams<{ token: string }>();

@@ -2,6 +2,7 @@ import "./env";
 import { Worker } from "bullmq";
 import { runCommand, resolveScriptPath } from "@dbbkp/runner";
 import { connection } from "./connection";
+import { runBackup, runRestore, runScheduledBackup } from "@dbbkp/backup";
 import "./pipeline.worker";
 import "./hosting.worker";
 import "./database.worker";
@@ -13,6 +14,22 @@ const scriptPath = resolveScriptPath("dbbkp.sh");
 new Worker(
   "backup",
   async (job) => {
+    // Data · Backups (packages/backup): one backup, a scheduled one, a restore.
+    if (job.name === "run-backup") {
+      const b = await runBackup(job.data.backupId);
+      console.log(`[Backup] ${b.targetName}: ${b.status}${b.error ? ` (${b.error})` : ""}`);
+      return { status: b.status };
+    }
+    if (job.name === "scheduled-backup") {
+      const b = await runScheduledBackup(job.data.policyId);
+      console.log(`[Backup] schedule ${job.data.policyId}: ${"skipped" in b ? `skipped, ${b.skipped}` : b.status}`);
+      return "skipped" in b ? b : { status: b.status };
+    }
+    if (job.name === "run-restore") {
+      const r = await runRestore(job.data.restoreId);
+      console.log(`[Restore] ${r.targetName}: ${r.status}${r.error ? ` (${r.error})` : ""}`);
+      return { status: r.status };
+    }
     if (job.name === "pgsql-backup") {
       console.log(`[Worker] Executing job ${job.id}: pgsql-backup`);
       
@@ -63,6 +80,7 @@ new Worker(
   },
   {
     connection,
+    concurrency: 2,
   }
 );
 

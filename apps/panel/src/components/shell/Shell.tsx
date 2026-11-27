@@ -10,7 +10,6 @@ import {
   ChevronsRight,
   Database,
   FolderOpen,
-  HardDriveDownload,
   LayoutDashboard,
   LayoutTemplate,
   LogOut,
@@ -50,7 +49,7 @@ export function useCrumbs(crumbs: Crumb[]) {
   }, [key, set]);
 }
 
-type NavItem = { href: string; label: string; icon: React.ReactNode; soon?: boolean; match?: (p: string) => boolean; count?: "apps"; adminOnly?: boolean };
+type NavItem = { href: string; label: string; icon: React.ReactNode; soon?: boolean; match?: (p: string) => boolean; count?: "apps" | "dbs"; adminOnly?: boolean };
 const NAV: Array<{ group?: string; items: NavItem[] }> = [
   {
     items: [
@@ -64,10 +63,9 @@ const NAV: Array<{ group?: string; items: NavItem[] }> = [
   {
     group: "Data",
     items: [
-      { href: "/databases", label: "Databases", icon: <Database size={17} />, soon: true },
-      { href: "/backups", label: "Backups", icon: <Archive size={17} />, soon: true },
-      { href: "/backup-cli", label: "Backup CLI", icon: <HardDriveDownload size={17} /> },
-      { href: "/files", label: "Files", icon: <FolderOpen size={17} />, soon: true },
+      { href: "/databases", label: "Databases", icon: <Database size={17} />, count: "dbs" },
+      { href: "/backups", label: "Backups", icon: <Archive size={17} />, match: (p) => p.startsWith("/backups") || p.startsWith("/backup-cli") },
+      { href: "/files", label: "Files", icon: <FolderOpen size={17} /> },
     ],
   },
   {
@@ -90,7 +88,8 @@ function Sidebar({ rail, open, onToggleRail, onNavigate }: { rail: boolean; open
   const pathname = usePathname();
   const active = (i: NavItem) => (i.match ? i.match(pathname) : pathname.startsWith(i.href));
   const sites = trpc.sites.list.useQuery(undefined, { staleTime: 30_000 });
-  const counts: Record<string, number | undefined> = { apps: sites.data?.filter((s: any) => !s.isPreview).length };
+  const dbs = trpc.database.count.useQuery(undefined, { staleTime: 60_000 });
+  const counts: Record<string, number | undefined> = { apps: sites.data?.filter((s: any) => !s.isPreview).length, dbs: dbs.data };
   const isAdmin = useAuth().user?.role === "admin";
   return (
     <aside className={cx("sidebar", rail && "rail", open && "open")}>

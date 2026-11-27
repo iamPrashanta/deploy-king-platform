@@ -30,6 +30,8 @@ import { startExpirationReaper } from "./services/reaper";
 import { startAutomaticCleanup } from "./services/cleanup";
 import { startHostWatch } from "./services/hostwatch";
 import { syncSchedules } from "./services/cronjobs";
+import { syncBackupSchedules } from "./services/backups";
+import filesRest from "./routes/files";
 import { startReconciliationLoop } from "./services/reconciler";
 
 const app = express();
@@ -52,6 +54,7 @@ app.use(morgan("dev", {
 mountDesktop(app); // before /api/auth: closes register on desktop machines
 app.use("/api/auth", authRouter);
 app.use("/api/sites", requireAuth, sitesRouter);
+app.use("/api/files", filesRest); // Data · Files: downloads and uploads (checks its own access)
 app.use("/webhooks", webhooksRouter);
 app.use("/hooks", hooksRouter);
 app.use("/mcp", mcpRouter); // AI agents (Model Context Protocol)
@@ -154,6 +157,7 @@ async function startServer() {
     startAutomaticCleanup();
     startHostWatch();
     syncSchedules().then((r) => console.log(`[Cron] ${r.jobs} scheduled jobs, ${r.added} schedules restored`)).catch((e) => console.error("[Cron] could not sync schedules:", e?.message ?? e));
+    syncBackupSchedules().then((r) => console.log(`[Backups] ${r.policies} backup schedules, ${r.added} restored`)).catch((e) => console.error("[Backups] could not sync schedules:", e?.message ?? e));
 
     // Reconciliation loop: fix drift/crashed containers every 15m
     startReconciliationLoop();
