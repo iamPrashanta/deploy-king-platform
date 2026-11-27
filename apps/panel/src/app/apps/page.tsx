@@ -7,8 +7,10 @@ import { appStatus, appUrl, sourceLabel, RUNTIME } from "@/components/apps";
 import { trpc } from "@/utils/trpc";
 import { useCrumbs } from "@/components/shell/Shell";
 import { Empty, PageHeader, Skeleton, StatusBadge, Tile, timeAgo, isLiveStatus } from "@/components/ui";
+import { useCan } from "@/components/useCan";
 
 export default function AppsPage() {
+  const can = useCan();
   useCrumbs([{ label: "Applications" }]);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<"all" | "running" | "failed">("all");
@@ -33,7 +35,7 @@ export default function AppsPage() {
       <PageHeader
         title="Applications"
         description="Every app runs in its own container behind the proxy, with HTTPS, logs, variables and one-click rollback."
-        actions={<Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> New app</Link>}
+        actions={can("site.create") ? <Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> New app</Link> : undefined}
       />
 
       {total > 0 && (
@@ -60,7 +62,7 @@ export default function AppsPage() {
             action={
               <div className="row" style={{ justifyContent: "center" }}>
                 <Link href="/templates" className="btn">Browse templates</Link>
-                <Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> New app</Link>
+                {can("site.create") && <Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> New app</Link>}
               </div>
             }
           >

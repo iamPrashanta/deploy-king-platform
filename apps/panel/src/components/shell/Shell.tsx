@@ -30,6 +30,7 @@ import { ThemeSwitch } from "@/components/theme";
 import { cx, useClickAway } from "@/components/ui";
 import { CommandPalette } from "./CommandPalette";
 import { trpc } from "@/utils/trpc";
+import { useCan } from "@/components/useCan";
 
 export const Crown = ({ size = 15 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
@@ -187,6 +188,7 @@ function AccountMenu() {
 }
 
 function Header({ crumbs, onMenu, onSearch }: { crumbs: Crumb[]; onMenu: () => void; onSearch: () => void }) {
+  const can = useCan();
   return (
     <header className="header">
       <button className="icon-btn mobile-only" onClick={onMenu} aria-label="Menu">
@@ -206,9 +208,11 @@ function Header({ crumbs, onMenu, onSearch }: { crumbs: Crumb[]; onMenu: () => v
         <span className="label-text">Search apps and pages</span>
         <kbd>Ctrl K</kbd>
       </button>
-      <Link href="/apps/new" className="btn btn-primary btn-sm desktop-only">
-        <Plus size={14} /> New app
-      </Link>
+      {can("site.create") && (
+        <Link href="/apps/new" className="btn btn-primary btn-sm desktop-only">
+          <Plus size={14} /> New app
+        </Link>
+      )}
       <GearMenu />
       <AccountMenu />
     </header>

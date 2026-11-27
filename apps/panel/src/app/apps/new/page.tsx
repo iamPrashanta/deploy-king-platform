@@ -12,6 +12,7 @@ import { Empty, PageHeader, Skeleton, Spinner, cx, errMsg, timeAgo } from "@/com
 import { EnvEditor, generateSecret, rowBuildTime, type EnvRow } from "@/components/EnvEditor";
 import { ChecksList, Collapsible, FactsGrid, FileList, Question, VerdictBanner, type Report } from "@/components/ProjectReport";
 import { appUrl } from "@/components/apps";
+import { useCan } from "@/components/useCan";
 
 type SourceKind = "github" | "url" | "image";
 type Step = "source" | "check" | "configure";
@@ -51,6 +52,7 @@ function Steps({ step, skipCheck }: { step: Step; skipCheck: boolean }) {
 export default function NewAppPage() {
   useCrumbs([{ label: "Applications", href: "/apps" }, { label: "New app" }]);
   const router = useRouter();
+  const can = useCan();
   const info = trpc.system.info.useQuery(undefined, { staleTime: 5 * 60_000 });
   const providers = trpc.git.providers.useQuery(undefined, { staleTime: 60_000 });
 
@@ -199,6 +201,11 @@ export default function NewAppPage() {
       }
     );
   };
+
+  // The API refuses the upload without "Create apps"; say so instead of showing a form that cannot be sent.
+  if (!can("site.create")) {
+    return <div className="page"><Empty icon={<Lock size={20} />} title="Creating apps needs permission">Ask an admin to give you Create apps.</Empty></div>;
+  }
 
   return (
     <div className="page" style={{ maxWidth: 980 }}>

@@ -7,6 +7,7 @@ import { useCrumbs } from "@/components/shell/Shell";
 import { PageHeader, Skeleton, StatusBadge, bytes, duration, timeAgo, Empty, cx } from "@/components/ui";
 import { useAuth } from "@/components/AuthProvider";
 import { memText } from "@/components/FitCheck";
+import { useCan } from "@/components/useCan";
 
 function Meter({ used, total }: { used: number | null; total: number | null }) {
   const pct = used != null && total ? Math.round((used / total) * 100) : 0;
@@ -18,6 +19,7 @@ function Meter({ used, total }: { used: number | null; total: number | null }) {
 }
 
 export default function OverviewPage() {
+  const can = useCan();
   useCrumbs([{ label: "Overview" }]);
   const { user } = useAuth();
   const q = trpc.system.overview.useQuery(undefined, { refetchInterval: 10_000 });
@@ -39,7 +41,7 @@ export default function OverviewPage() {
         actions={
           <>
             <Link href="/templates" className="btn"><LayoutTemplate size={15} /> Templates</Link>
-            <Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> New app</Link>
+            {can("site.create") && <Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> New app</Link>}
           </>
         }
       />
@@ -145,7 +147,7 @@ export default function OverviewPage() {
         {!d ? (
           <div className="card-body stack">{[0, 1, 2].map((i) => <Skeleton key={i} h={20} />)}</div>
         ) : d.recentDeployments.length === 0 ? (
-          <Empty icon={<Rocket size={18} />} title="No deployments yet" action={<Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> Deploy an app</Link>}>
+          <Empty icon={<Rocket size={18} />} title="No deployments yet" action={can("site.create") ? <Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> Deploy an app</Link> : undefined}>
             Deploy from GitHub, any public git URL, a Docker image or a one-click template.
           </Empty>
         ) : (
