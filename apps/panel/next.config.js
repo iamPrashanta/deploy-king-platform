@@ -4,7 +4,8 @@ const path = require("path");
 // (http://dbbkp-api:4000); in development the API on this machine.
 // Next.js fixes rewrites at build time, so the panel image builds with a placeholder and its
 // start script puts the real address in (apps/panel/docker-entrypoint.sh).
-const API = (process.env.API_INTERNAL_URL || "http://localhost:4000").replace(/\/+$/, "");
+// DK_API_URL and API_INTERNAL_URL are the same setting (two names from two branches); DK_API_URL wins.
+const API = (process.env.DK_API_URL || process.env.API_INTERNAL_URL || "http://localhost:4000").replace(/\/+$/, "");
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

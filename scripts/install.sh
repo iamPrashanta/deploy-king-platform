@@ -655,6 +655,7 @@ ENVEOF
   chmod 600 "$ENV_FILE"
   umask 022
   cp "$SOURCE_DIR/deploy/compose.yml" "$SOURCE_DIR/deploy/compose.tls.yml" "$INSTALL_DIR/"
+  [[ -f "$SOURCE_DIR/deploy/compose.desktop.yml" ]] && cp "$SOURCE_DIR/deploy/compose.desktop.yml" "$INSTALL_DIR/"
   # The compose file of installers before 3.0 pulled images that were never published.
   [[ -f "$INSTALL_DIR/docker-compose.yml" ]] && mv "$INSTALL_DIR/docker-compose.yml" "$INSTALL_DIR/docker-compose.yml.old"
   ok "Configuration written to $ENV_FILE (compose files: $COMPOSE_FILES)"

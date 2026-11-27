@@ -25,7 +25,9 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-di
 # ── 2. Runtime ──────────────────────────────────────────────────────────────────
 FROM ${NODE_IMAGE}
 # git: deploys clone repositories. bash: the job scripts. tini: reaps child processes.
-RUN apk add --no-cache git bash coreutils tar tini ca-certificates openssh-client \
+# pg_dump, pg_restore, psql: database backups (the client must be at least as new as the server: 16).
+# rclone: backups sent off this server.
+RUN apk add --no-cache git bash coreutils tar tini ca-certificates openssh-client postgresql16-client rclone \
  && npm install -g tsx@4.23.15 \
  && npm cache clean --force
 # Builds and app containers go through the Docker socket; pipelines also call the docker CLI.
@@ -35,7 +37,8 @@ COPY --from=build /out /app
 ENV NODE_ENV=production \
     SITES_ROOT=/var/www/sites \
     SCRIPTS_DIR=/app/scripts \
-    HEARTBEAT_FILE=/tmp/dk-worker-alive
+    HEARTBEAT_FILE=/tmp/dk-worker-alive \
+    DK_BACKUP_DIR=/var/backups/dbbkp
 # Healthy while the worker reaches Redis and the database (src/heartbeat.ts writes the file every 20 s).
 HEALTHCHECK --interval=20s --timeout=5s --start-period=60s --retries=3 \
   CMD [ -f /tmp/dk-worker-alive ] && [ $(( $(date +%s) - $(stat -c %Y /tmp/dk-worker-alive) )) -lt 90 ]

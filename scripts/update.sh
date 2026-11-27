@@ -51,6 +51,7 @@ elif [[ -n "$SOURCE_DIR" ]]; then
 fi
 if [[ -f "$SOURCE_DIR/deploy/compose.yml" ]]; then
   cp "$SOURCE_DIR/deploy/compose.yml" "$SOURCE_DIR/deploy/compose.tls.yml" "$INSTALL_DIR/"
+  [[ -f "$SOURCE_DIR/deploy/compose.desktop.yml" ]] && cp "$SOURCE_DIR/deploy/compose.desktop.yml" "$INSTALL_DIR/"
 fi
 
 # 2. New images
