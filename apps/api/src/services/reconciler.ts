@@ -5,6 +5,7 @@ import Docker from "dockerode";
 import { enqueueDeploy } from "./deploy";
 import { fireAppEvent } from "./automations";
 import { demuxLogs } from "./validation";
+import { alertAppCrashing, alertWorkerCrashing } from "@dbbkp/notify";
 
 const docker = new Docker();
 
@@ -61,6 +62,8 @@ async function checkHealth(site: Site, containerId: string): Promise<"ok" | "cra
         error: detail.outOfMemory ? "The app ran out of memory" : lastOutput.split("\n").filter(Boolean).slice(-1)[0] ?? "The app keeps restarting",
       }).catch((err) => console.error("[Reconciler] crash event:", err.message));
     }
+    // Every pass while it keeps crashing; the alert itself goes out at most once an hour.
+    await alertAppCrashing(site, { restarts, outOfMemory: detail.outOfMemory, lastLine: lastOutput.split("\n").filter(Boolean).slice(-1)[0] ?? null });
     return "crashing";
   }
 
@@ -83,13 +86,20 @@ async function checkHealth(site: Site, containerId: string): Promise<"ok" | "cra
  * it again from the same image would only crash again.
  */
 /** Fewer worker containers than the app's workers ask for (one was removed by hand, the engine restarted): put them back. */
-async function reconcileWorkers(site: { id: string; currentTag: string | null }, all: Docker.ContainerInfo[]) {
+async function reconcileWorkers(site: { id: string; domain: string; currentTag: string | null }, all: Docker.ContainerInfo[]) {
   if (!site.currentTag) return;
   const defs = await db.select({ copies: siteWorkers.copies }).from(siteWorkers).where(and(eq(siteWorkers.siteId, site.id), eq(siteWorkers.enabled, true)));
   const want = defs.reduce((n, d) => n + Math.max(1, Math.min(d.copies, 8)), 0);
   // Any state counts: a worker that stopped by itself (restart switched off) is not started again.
   const have = all.filter((c) => c.Labels?.["dbbkp.site"] === site.id && c.Labels?.["dbbkp.role"] === "worker").length;
   if (have < want) await hostingQueue.add("sync-workers", { siteId: site.id }, { jobId: `sync-workers-${site.id}`, removeOnComplete: true, removeOnFail: true });
+  // A worker the engine keeps restarting is crash-looping. The alert goes out at most once an hour per worker.
+  for (const c of all) {
+    if (c.Labels?.["dbbkp.site"] !== site.id || c.Labels?.["dbbkp.role"] !== "worker" || c.State !== "restarting") continue;
+    const container = (c.Names?.[0] ?? c.Id.slice(0, 12)).replace(/^\//, "");
+    const name = c.Labels?.["dbbkp.worker"] || container;
+    await alertWorkerCrashing(site, { name, container });
+  }
 }
 
 export async function reconcileOnce() {

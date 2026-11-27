@@ -2,6 +2,7 @@ import fs from "fs-extra";
 import { db, hostItems, platformSettings, sites } from "@dbbkp/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { planFor, syncResults } from "./hostactions";
+import { alertHostUrgent } from "@dbbkp/notify";
 
 /**
  * Watching the server for things an intruder leaves behind.
@@ -310,6 +311,12 @@ export async function ingest(report: Report): Promise<{ added: number; changed: 
   for (let i = 0; i < change.drop.length; i += 200) await db.delete(hostItems).where(inArray(hostItems.key, change.drop.slice(i, i + 200)));
   for (let i = 0; i < change.gone.length; i += 200) await db.update(hostItems).set({ present: false }).where(inArray(hostItems.key, change.gone.slice(i, i + 200)));
   await db.update(hostItems).set({ lastSeenAt: now }).where(eq(hostItems.present, true));
+  // Alerts for urgent findings that are new or changed in this report (at most one per finding per hour).
+  const urgentNow = [
+    ...change.insert.filter((r) => r.status === "new" && r.severity === "urgent").map((r) => ({ key: r.key, label: r.label, reason: r.reason, status: "new" })),
+    ...change.update.filter((u) => u.set.status === "changed" && u.set.severity === "urgent").map((u) => ({ key: u.key, label: String(u.set.label), reason: String(u.set.reason), status: "changed" })),
+  ];
+  for (const f of urgentNow.slice(0, 20)) await alertHostUrgent(f);
   const value: WatchMeta = { generatedAt: report.generatedAt, hostname: report.hostname, asRoot: report.asRoot !== false, ingestedAt: now.toISOString(), items: report.items.length };
   await db.insert(platformSettings).values({ key: META_KEY, value }).onConflictDoUpdate({ target: platformSettings.key, set: { value, updatedAt: now } });
   return { added: change.insert.filter((r) => r.status === "new").length, changed: change.update.filter((u) => u.set.status === "changed").length, gone: change.gone.length };

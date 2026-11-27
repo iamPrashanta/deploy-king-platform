@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import crypto from "node:crypto";
 import { logAudit } from "@dbbkp/audit";
+import { nextStep } from "../services/twofactor";
 
 const router = Router();
 
@@ -29,6 +30,13 @@ router.post("/login", async (req, res) => {
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
       return res.status(401).json({ error: "Invalid credentials" });
+    }
+    if (user.suspendedAt) {
+      return res.status(403).json({ error: "This account is suspended. Ask the owner of this panel." });
+    }
+    // This older route has no second step. Accounts with 2-step sign-in (or that must set it up) sign in through the panel.
+    if ((await nextStep(user)) !== "none") {
+      return res.status(403).json({ error: "This account uses 2-step sign-in. Sign in through the panel." });
     }
 
     // 1. Create Session in DB

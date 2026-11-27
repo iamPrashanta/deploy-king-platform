@@ -14,6 +14,7 @@ import { decrypt } from "@dbbkp/security";
 import { createBuildPlan, GENERATED_DOCKERFILE, gitAuthArgs, redactToken, resolveBuildRoot, withBuildArgs, NODE_VERSIONS, type BuildPlan } from "./deploy/detect";
 import { PassThrough } from "node:stream";
 import { fireDeployEvent } from "./automation.worker";
+import { alertDeployFailed } from "@dbbkp/notify";
 import net from "node:net";
 
 /**
@@ -996,6 +997,7 @@ async function deploySite(job: Job<DeployJobData>) {
       .where(eq(sites.id, site.id));
     if (stillServing) log.line("The previous release is still serving traffic.");
     fireDeployEvent(site, { id: deployment.id, trigger: deployment.trigger, status: "failed", error: message }).catch((e) => console.error("[Workflows] deploy event:", e.message));
+    await alertDeployFailed(site, deployment, message, stillServing);
 
     throw err;
   } finally {

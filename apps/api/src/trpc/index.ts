@@ -18,6 +18,8 @@ import { automationsRouter } from "./routers/automations.router";
 import { mcpRouter } from "./routers/mcp.router";
 import { teamRouter } from "./routers/team.router";
 import { hostRouter } from "./routers/host.router";
+import { twoFactorRouter } from "./routers/twofactor.router";
+import { notifyRouter } from "./routers/notify.router";
 
 export const appRouter = router({
   auth: authRouter,
@@ -39,6 +41,8 @@ export const appRouter = router({
   mcp: mcpRouter,
   team: teamRouter,
   host: hostRouter,
+  twoFactor: twoFactorRouter,
+  notify: notifyRouter,
 });
 
 export type AppRouter = typeof appRouter;
