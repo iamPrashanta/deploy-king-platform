@@ -35,6 +35,7 @@ import { verifyToken, type AuthedUser } from "../middleware/requireAuth";
 import { logAudit } from "@dbbkp/audit";
 import { hasPermission, PERMISSIONS } from "../utils/rbac";
 import { ExecutionBroker } from "@dbbkp/runner";
+import { handleSshMessage, closeSocketSessions, startSshHousekeeping } from "./ssh";
 
 const docker = new Docker();
 
@@ -357,6 +358,12 @@ export function setupWebSocketGateway(httpServer: HttpServer) {
         ws.send(JSON.stringify({ type: "terminal.closed", sessionId: id }));
       }
 
+      // ── terminals on connected servers (Servers & SSH, see ws/ssh.ts) ─────
+      else if (typeof type === "string" && type.startsWith("ssh.")) {
+        const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0] || req.socket.remoteAddress || null;
+        await handleSshMessage(ws, user!, msg, ip);
+      }
+
       // ── unsubscribe ───────────────────────────────────────────────────────
       else if (type === "unsubscribe") {
         if (channel && id) unsubscribe(channel, id, ws);
@@ -371,6 +378,7 @@ export function setupWebSocketGateway(httpServer: HttpServer) {
     }
 
     ws.on("close", () => {
+      closeSocketSessions(ws);
       // Unsubscribe from all channels
       for (const [key, clients] of subscriptions) {
         clients.delete(ws);
@@ -387,6 +395,7 @@ export function setupWebSocketGateway(httpServer: HttpServer) {
   });
 
   console.log("[WS] Unified gateway ready on /ws");
+  startSshHousekeeping();
 
   // ─── Session Reaper ────────────────────────────────────────────────────────
   // Runs every minute to close idle or orphaned terminal sessions

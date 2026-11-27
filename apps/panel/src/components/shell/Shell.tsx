@@ -74,7 +74,7 @@ const NAV: Array<{ group?: string; items: NavItem[] }> = [
     group: "Platform",
     items: [
       { href: "/agents", label: "AI agents", icon: <Bot size={17} /> },
-      { href: "/servers", label: "Servers", icon: <Server size={17} />, soon: true },
+      { href: "/servers", label: "Servers", icon: <Server size={17} />, adminOnly: true },
       { href: "/team", label: "Team", icon: <Users size={17} />, adminOnly: true },
       { href: "/security", label: "Security", icon: <ShieldAlert size={17} />, adminOnly: true },
       { href: "/settings", label: "Settings", icon: <Settings size={17} /> },

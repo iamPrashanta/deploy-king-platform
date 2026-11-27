@@ -49,7 +49,23 @@ export type AuditAction =
   | "team_member_update"
   | "team_member_suspend"
   | "team_member_remove"
-  | "access_request_decide";
+  | "access_request_decide"
+  // servers agent: Servers & SSH
+  | "ssh_server_add"
+  | "ssh_server_update"
+  | "ssh_server_delete"
+  | "ssh_key_create"
+  | "ssh_key_import"
+  | "ssh_key_delete"
+  | "ssh_key_install"
+  | "ssh_key_rotate"
+  | "ssh_host_trust"
+  | "ssh_host_refused"
+  | "ssh_test"
+  | "ssh_terminal_open"
+  | "ssh_terminal_close"
+  | "ssh_terminal_denied"
+  | "ssh_settings";
 
 export interface AuditContext {
   /** UUID of the user performing the action */

@@ -18,6 +18,7 @@ import { automationsRouter } from "./routers/automations.router";
 import { mcpRouter } from "./routers/mcp.router";
 import { teamRouter } from "./routers/team.router";
 import { hostRouter } from "./routers/host.router";
+import { serversRouter } from "./routers/servers.router";
 
 export const appRouter = router({
   auth: authRouter,
@@ -39,6 +40,7 @@ export const appRouter = router({
   mcp: mcpRouter,
   team: teamRouter,
   host: hostRouter,
+  servers: serversRouter,
 });
 
 export type AppRouter = typeof appRouter;
