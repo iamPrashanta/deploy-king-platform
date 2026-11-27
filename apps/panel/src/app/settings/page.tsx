@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, ExternalLink, Github, KeyRound, Monitor, RefreshCw, Server, Trash2, Webhook, Wrench, XCircle, AlertTriangle } from "lucide-react";
+import { Bell, CheckCircle2, ExternalLink, Github, KeyRound, Mail, Monitor, RefreshCw, Server, Smartphone, Trash2, Webhook, Wrench, XCircle, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/utils/trpc";
 import { useCrumbs } from "@/components/shell/Shell";
@@ -11,8 +11,9 @@ import { Code, CopyButton, Dialog, Empty, PageHeader, Skeleton, Spinner, cx, err
 import { useAuth } from "@/components/AuthProvider";
 import { CapacitySettings } from "@/components/FitCheck";
 import { CleanupCard, UsageTable } from "@/components/Cleanup";
+import { AlertSettings, EmailSettings, GitHubAppCard, SignInSettings } from "@/components/SettingsSecurity";
 
-type Tab = "general" | "server" | "github" | "webhooks";
+type Tab = "general" | "signin" | "server" | "github" | "webhooks" | "email" | "alerts";
 
 function General() {
   const { choice, resolved } = useTheme();
@@ -118,13 +119,15 @@ function GitHubSettings() {
   });
   const disconnect = trpc.git.disconnect.useMutation({ onSuccess: () => utils.git.providers.invalidate(), onError: (e) => toast.error(errMsg(e)) });
 
+  const { user } = useAuth();
   return (
     <div className="stack" style={{ gap: 14 }}>
+      {user?.role === "admin" && <GitHubAppCard />}
       <div className="card">
         <div className="card-head">
           <Github size={15} />
           <h3>GitHub connections</h3>
-          <span className="right"><button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}><Github size={13} /> Connect GitHub</button></span>
+          <span className="right"><button className="btn btn-sm" onClick={() => setOpen(true)}><KeyRound size={13} /> Connect with a token</button></span>
         </div>
         {providers.isLoading ? (
           <div className="card-body"><Skeleton h={40} /></div>
@@ -198,12 +201,15 @@ function GitHubSettings() {
 
 function Webhooks() {
   const info = trpc.system.info.useQuery();
+  const { user } = useAuth();
+  const app = trpc.git.app.useQuery(undefined, { retry: false, enabled: user?.role === "admin" });
   const url = info.data?.webhookUrl?.startsWith("/") ? `${typeof window !== "undefined" ? window.location.origin : ""}${info.data.webhookUrl}` : info.data?.webhookUrl ?? "";
   return (
     <div className="stack" style={{ gap: 14 }}>
       <div className="card">
         <div className="card-head"><Webhook size={15} /><h3>Deploy on push</h3></div>
         <div className="card-body stack" style={{ gap: 14 }}>
+          {(app.data as any)?.app && <div className="notice ok small"><CheckCircle2 size={15} className="ok-text" /><span>The GitHub App sends push and pull request events for every repository it can see. Add a webhook by hand only for repositories outside it.</span></div>}
           <div className="muted small">Apps with “Redeploy on push” turned on deploy when GitHub sends a push for their branch. Pull requests get preview apps. Add this webhook to each repository (Settings → Webhooks → Add webhook):</div>
           <dl className="kv">
             <dt>Payload URL</dt>
@@ -227,15 +233,19 @@ function SettingsInner() {
   const router = useRouter();
   const tab = ((params.get("tab") as Tab) || "general") as Tab;
   const go = (t: Tab) => router.replace(t === "general" ? "/settings" : `/settings?tab=${t}`, { scroll: false });
+  const { user } = useAuth();
+  const admin = user?.role === "admin";
   const tabs: Array<[Tab, string, React.ReactNode]> = [
     ["general", "General", <Monitor key="m" size={14} />],
+    ["signin", "Sign-in", <Smartphone key="si" size={14} />],
     ["server", "Server", <Server key="s" size={14} />],
     ["github", "GitHub", <Github key="g" size={14} />],
     ["webhooks", "Webhooks", <Webhook key="w" size={14} />],
+    ...(admin ? ([["email", "Email", <Mail key="e" size={14} />], ["alerts", "Alerts", <Bell key="a" size={14} />]] as Array<[Tab, string, React.ReactNode]>) : []),
   ];
   return (
     <div className="page" style={{ maxWidth: 960 }}>
-      <PageHeader title="Settings" description="Appearance, server readiness and connections." />
+      <PageHeader title="Settings" description="Appearance, sign-in, server readiness, connections, email and alerts." />
       <div className="tabs">
         {tabs.map(([k, l, ic]) => (
           <button key={k} className={cx("tab", tab === k && "on")} onClick={() => go(k)}>{ic}{l}</button>
@@ -245,6 +255,9 @@ function SettingsInner() {
       {tab === "server" && <ServerChecks />}
       {tab === "github" && <GitHubSettings />}
       {tab === "webhooks" && <Webhooks />}
+      {tab === "signin" && <SignInSettings />}
+      {tab === "email" && <EmailSettings />}
+      {tab === "alerts" && <AlertSettings onGoEmail={() => go("email")} />}
     </div>
   );
 }
