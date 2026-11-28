@@ -202,6 +202,8 @@ function auditRefusal(kind: "ticket_refused" | "ticket_wrong_file", needed: Need
       code: r.code,
       needs: needed.action,
       kind: needed.kind,
+      // The machine's own clock, in unix seconds: an "expired" that is really a wrong clock shows here.
+      machineTime: Math.floor(now / 1000),
       ...(where.method ? { method: where.method } : {}),
       path: where.path.slice(0, 300),
       ...(where.auth ? { auth: where.auth } : {}),

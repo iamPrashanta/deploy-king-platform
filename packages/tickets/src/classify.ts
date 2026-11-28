@@ -80,8 +80,8 @@ function parsed(body: unknown): unknown {
       return undefined;
     }
   }
-  if (body instanceof Uint8Array) return parsed(Buffer.from(body.buffer, body.byteOffset, body.byteLength).toString("utf8"));
-  if (body instanceof ArrayBuffer) return parsed(Buffer.from(body).toString("utf8"));
+  // TextDecoder, not Buffer: this file uses nothing of Node, so the app can also call it from a page.
+  if (body instanceof Uint8Array || body instanceof ArrayBuffer) return parsed(new TextDecoder().decode(body));
   return body;
 }
 
