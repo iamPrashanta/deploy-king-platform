@@ -1,0 +1,16 @@
+{
+  "name": "@dbbkp/tickets",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deploy King tickets: which requests need one, and how one is signed and checked. Node's crypto only, so the folder can be copied as it is.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.0",
+    "typescript": "^5.2.2"
+  }
+}

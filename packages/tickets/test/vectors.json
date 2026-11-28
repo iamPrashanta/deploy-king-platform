@@ -1,0 +1,148 @@
+{
+  "about": "Deploy King ticket test vectors. Signed bytes = UTF-8 of JSON.stringify([v,kid,account,device,action,app,sha256,nonce,iat,exp]). Wire = base64url (no padding) of JSON.stringify(ticket) with keys in the order v,kid,account,device,action,app,sha256,nonce,iat,exp,sig. sig = base64url Ed25519 signature. The key below is a TEST key with a public seed: never trust it outside tests.",
+  "key": {
+    "kid": "test-2026-11",
+    "alg": "Ed25519",
+    "seedHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "privateKeyPkcs8Base64": "MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f",
+    "publicKey": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
+  },
+  "publicKeys": [
+    {
+      "kid": "test-2026-11",
+      "alg": "Ed25519",
+      "publicKey": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
+    }
+  ],
+  "validAt": 1795600100,
+  "vectors": [
+    {
+      "name": "deploy from a ZIP",
+      "fields": {
+        "v": 1,
+        "kid": "test-2026-11",
+        "account": "acc_test0000000001",
+        "device": "3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10",
+        "action": "deploy",
+        "app": "shop-api",
+        "sha256": "9f86d081884c7d659a2feab0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "iat": 1795600000,
+        "exp": 1795600300
+      },
+      "signedText": "[1,\"test-2026-11\",\"acc_test0000000001\",\"3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10\",\"deploy\",\"shop-api\",\"9f86d081884c7d659a2feab0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\",\"00112233445566778899aabbccddeeff\",1795600000,1795600300]",
+      "signedHex": "5b312c22746573742d323032362d3131222c226163635f7465737430303030303030303031222c2233663163396332652d376135352d346330622d396435382d306236663666316632613130222c226465706c6f79222c2273686f702d617069222c2239663836643038313838346337643635396132666561623063353561643031356133626634663162326230623832326364313564366331356230663030613038222c223030313132323333343435353636373738383939616162626363646465656666222c313739353630303030302c313739353630303330305d",
+      "sig": "M_5j9PPZ43r4Z9ZRJVA4JIa1nK6yXq6ZmTKnpSKNkxpc9YFESVRe2Di7jqWisifMpJWhy3c2T0vPfMWTWGmuCA",
+      "ticket": {
+        "v": 1,
+        "kid": "test-2026-11",
+        "account": "acc_test0000000001",
+        "device": "3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10",
+        "action": "deploy",
+        "app": "shop-api",
+        "sha256": "9f86d081884c7d659a2feab0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "iat": 1795600000,
+        "exp": 1795600300,
+        "sig": "M_5j9PPZ43r4Z9ZRJVA4JIa1nK6yXq6ZmTKnpSKNkxpc9YFESVRe2Di7jqWisifMpJWhy3c2T0vPfMWTWGmuCA"
+      },
+      "wire": "eyJ2IjoxLCJraWQiOiJ0ZXN0LTIwMjYtMTEiLCJhY2NvdW50IjoiYWNjX3Rlc3QwMDAwMDAwMDAxIiwiZGV2aWNlIjoiM2YxYzljMmUtN2E1NS00YzBiLTlkNTgtMGI2ZjZmMWYyYTEwIiwiYWN0aW9uIjoiZGVwbG95IiwiYXBwIjoic2hvcC1hcGkiLCJzaGEyNTYiOiI5Zjg2ZDA4MTg4NGM3ZDY1OWEyZmVhYjBjNTVhZDAxNWEzYmY0ZjFiMmIwYjgyMmNkMTVkNmMxNWIwZjAwYTA4Iiwibm9uY2UiOiIwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsImlhdCI6MTc5NTYwMDAwMCwiZXhwIjoxNzk1NjAwMzAwLCJzaWciOiJNXzVqOVBQWjQzcjRaOVpSSlZBNEpJYTFuSzZ5WHE2Wm1US25wU0tOa3hwYzlZRkVTVlJlMkRpN2pxV2lzaWZNcEpXaHkzYzJUMHZQZk1XVFdHbXVDQSJ9"
+    },
+    {
+      "name": "change, no app, no file",
+      "fields": {
+        "v": 1,
+        "kid": "test-2026-11",
+        "account": "acc_test0000000001",
+        "device": "3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10",
+        "action": "change",
+        "app": "",
+        "sha256": "",
+        "nonce": "0123456789abcdef0123456789abcdef",
+        "iat": 1795600000,
+        "exp": 1795600300
+      },
+      "signedText": "[1,\"test-2026-11\",\"acc_test0000000001\",\"3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10\",\"change\",\"\",\"\",\"0123456789abcdef0123456789abcdef\",1795600000,1795600300]",
+      "signedHex": "5b312c22746573742d323032362d3131222c226163635f7465737430303030303030303031222c2233663163396332652d376135352d346330622d396435382d306236663666316632613130222c226368616e6765222c22222c22222c223031323334353637383961626364656630313233343536373839616263646566222c313739353630303030302c313739353630303330305d",
+      "sig": "c0toqAgiGTA8PMx1TyjY9zmW1-2tOE2B3YPSUrJ4lSE4VydqveWMOWjF_t6jl3tfSr2qlmj4rIlaoBZGKjEZCg",
+      "ticket": {
+        "v": 1,
+        "kid": "test-2026-11",
+        "account": "acc_test0000000001",
+        "device": "3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10",
+        "action": "change",
+        "app": "",
+        "sha256": "",
+        "nonce": "0123456789abcdef0123456789abcdef",
+        "iat": 1795600000,
+        "exp": 1795600300,
+        "sig": "c0toqAgiGTA8PMx1TyjY9zmW1-2tOE2B3YPSUrJ4lSE4VydqveWMOWjF_t6jl3tfSr2qlmj4rIlaoBZGKjEZCg"
+      },
+      "wire": "eyJ2IjoxLCJraWQiOiJ0ZXN0LTIwMjYtMTEiLCJhY2NvdW50IjoiYWNjX3Rlc3QwMDAwMDAwMDAxIiwiZGV2aWNlIjoiM2YxYzljMmUtN2E1NS00YzBiLTlkNTgtMGI2ZjZmMWYyYTEwIiwiYWN0aW9uIjoiY2hhbmdlIiwiYXBwIjoiIiwic2hhMjU2IjoiIiwibm9uY2UiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiIsImlhdCI6MTc5NTYwMDAwMCwiZXhwIjoxNzk1NjAwMzAwLCJzaWciOiJjMHRvcUFnaUdUQThQTXgxVHlqWTl6bVcxLTJ0T0UyQjNZUFNVcko0bFNFNFZ5ZHF2ZVdNT1dqRl90NmpsM3RmU3IycWxtajRySWxhb0JaR0tqRVpDZyJ9"
+    },
+    {
+      "name": "delete an app",
+      "fields": {
+        "v": 1,
+        "kid": "test-2026-11",
+        "account": "acc_test0000000001",
+        "device": "3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10",
+        "action": "delete",
+        "app": "old-site",
+        "sha256": "",
+        "nonce": "ffeeddccbbaa99887766554433221100",
+        "iat": 1795600000,
+        "exp": 1795600300
+      },
+      "signedText": "[1,\"test-2026-11\",\"acc_test0000000001\",\"3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10\",\"delete\",\"old-site\",\"\",\"ffeeddccbbaa99887766554433221100\",1795600000,1795600300]",
+      "signedHex": "5b312c22746573742d323032362d3131222c226163635f7465737430303030303030303031222c2233663163396332652d376135352d346330622d396435382d306236663666316632613130222c2264656c657465222c226f6c642d73697465222c22222c226666656564646363626261613939383837373636353534343333323231313030222c313739353630303030302c313739353630303330305d",
+      "sig": "zQIZxN-bgGiuxZUli8H04nUO5UeTG27RSvhnHnzKzJnhs8pwiigd-cU1rc66lz-0uWHQGI-tIuB-sIUxrwADDA",
+      "ticket": {
+        "v": 1,
+        "kid": "test-2026-11",
+        "account": "acc_test0000000001",
+        "device": "3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10",
+        "action": "delete",
+        "app": "old-site",
+        "sha256": "",
+        "nonce": "ffeeddccbbaa99887766554433221100",
+        "iat": 1795600000,
+        "exp": 1795600300,
+        "sig": "zQIZxN-bgGiuxZUli8H04nUO5UeTG27RSvhnHnzKzJnhs8pwiigd-cU1rc66lz-0uWHQGI-tIuB-sIUxrwADDA"
+      },
+      "wire": "eyJ2IjoxLCJraWQiOiJ0ZXN0LTIwMjYtMTEiLCJhY2NvdW50IjoiYWNjX3Rlc3QwMDAwMDAwMDAxIiwiZGV2aWNlIjoiM2YxYzljMmUtN2E1NS00YzBiLTlkNTgtMGI2ZjZmMWYyYTEwIiwiYWN0aW9uIjoiZGVsZXRlIiwiYXBwIjoib2xkLXNpdGUiLCJzaGEyNTYiOiIiLCJub25jZSI6ImZmZWVkZGNjYmJhYTk5ODg3NzY2NTU0NDMzMjIxMTAwIiwiaWF0IjoxNzk1NjAwMDAwLCJleHAiOjE3OTU2MDAzMDAsInNpZyI6InpRSVp4Ti1iZ0dpdXhaVWxpOEgwNG5VTzVVZVRHMjdSU3Zobkhuekt6Sm5oczhwd2lpZ2QtY1UxcmM2Nmx6LTB1V0hRR0ktdEl1Qi1zSVV4cndBRERBIn0"
+    },
+    {
+      "name": "app name that needs JSON escaping",
+      "fields": {
+        "v": 1,
+        "kid": "test-2026-11",
+        "account": "acc_test0000000001",
+        "device": "3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10",
+        "action": "change",
+        "app": "café \"one\"\\two",
+        "sha256": "",
+        "nonce": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "iat": 1795600000,
+        "exp": 1795600300
+      },
+      "signedText": "[1,\"test-2026-11\",\"acc_test0000000001\",\"3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10\",\"change\",\"café \\\"one\\\"\\\\two\",\"\",\"a0a1a2a3a4a5a6a7a8a9aaabacadaeaf\",1795600000,1795600300]",
+      "signedHex": "5b312c22746573742d323032362d3131222c226163635f7465737430303030303030303031222c2233663163396332652d376135352d346330622d396435382d306236663666316632613130222c226368616e6765222c22636166c3a9205c226f6e655c225c5c74776f222c22222c226130613161326133613461356136613761386139616161626163616461656166222c313739353630303030302c313739353630303330305d",
+      "sig": "4BM4vIFus3p5zTUbjjvh51SuWLeXEbwQT1YOTI2c9y6YrxnVX45pMCQk-xEKgv_9Ku7irPj0DHb5uHRKuneeCQ",
+      "ticket": {
+        "v": 1,
+        "kid": "test-2026-11",
+        "account": "acc_test0000000001",
+        "device": "3f1c9c2e-7a55-4c0b-9d58-0b6f6f1f2a10",
+        "action": "change",
+        "app": "café \"one\"\\two",
+        "sha256": "",
+        "nonce": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "iat": 1795600000,
+        "exp": 1795600300,
+        "sig": "4BM4vIFus3p5zTUbjjvh51SuWLeXEbwQT1YOTI2c9y6YrxnVX45pMCQk-xEKgv_9Ku7irPj0DHb5uHRKuneeCQ"
+      },
+      "wire": "eyJ2IjoxLCJraWQiOiJ0ZXN0LTIwMjYtMTEiLCJhY2NvdW50IjoiYWNjX3Rlc3QwMDAwMDAwMDAxIiwiZGV2aWNlIjoiM2YxYzljMmUtN2E1NS00YzBiLTlkNTgtMGI2ZjZmMWYyYTEwIiwiYWN0aW9uIjoiY2hhbmdlIiwiYXBwIjoiY2Fmw6kgXCJvbmVcIlxcdHdvIiwic2hhMjU2IjoiIiwibm9uY2UiOiJhMGExYTJhM2E0YTVhNmE3YThhOWFhYWJhY2FkYWVhZiIsImlhdCI6MTc5NTYwMDAwMCwiZXhwIjoxNzk1NjAwMzAwLCJzaWciOiI0Qk00dklGdXMzcDV6VFViamp2aDUxU3VXTGVYRWJ3UVQxWU9USTJjOXk2WXJ4blZYNDVwTUNRay14RUtndl85S3U3aXJQajBESGI1dUhSS3VuZWVDUSJ9"
+    }
+  ]
+}
