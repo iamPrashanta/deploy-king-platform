@@ -23,6 +23,7 @@ import hooksRouter from "./routes/hooks";
 import mcpRouter from "./routes/mcp";
 import { llmsTxt } from "./routes/llms";
 import { mountDesktop } from "./routes/desktop"; // desktop agent: Deploy King Desktop key (DESKTOP_MODE only)
+import { mountTickets } from "./services/tickets"; // tickets agent: one-time approvals from the control server (desktop mode only)
 import { syncAllSchedules } from "./services/automations";
 import securityRouter from "./routes/security";
 import nodesRouter, { sweepOfflineNodes, pruneOldMetrics } from "./routes/nodes";
@@ -51,6 +52,12 @@ app.use(express.json({
 app.use(morgan("dev", {
   skip: (req) => req.url === "/internal/log"
 }));
+
+// ─── Tickets (desktop mode with an account) ─────────────────
+// Before every route below, after the JSON body is parsed: with DESKTOP_MODE=true and
+// DESKTOP_REQUIRE_TICKETS=true a request that deploys or changes something is refused unless it
+// carries a valid ticket. Mounts nothing otherwise.
+mountTickets(app);
 
 // ─── REST Auth (legacy support) ─────────────────────────────
 mountDesktop(app); // before /api/auth: closes register on desktop machines

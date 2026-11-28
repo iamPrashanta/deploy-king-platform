@@ -16,6 +16,7 @@
     "@dbbkp/notify": "workspace:^",
     "@dbbkp/runner": "workspace:*",
     "@dbbkp/security": "workspace:*",
+    "@dbbkp/tickets": "workspace:*",
     "@dbbkp/utils": "workspace:*",
     "@trpc/server": "^10.45.2",
     "adm-zip": "^0.5.10",

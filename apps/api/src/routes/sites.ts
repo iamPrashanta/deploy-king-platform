@@ -12,6 +12,7 @@ import { visibleSites } from "../services/team";
 import { hasPermission, PERMISSIONS } from "../utils/rbac";
 import { isValidDomain, normalizeDomain, siteDocRoot } from "../services/validation";
 import { extractProjectZip, UnsafeArchiveError } from "../services/zipsite";
+import { ticketFileCheck } from "../services/tickets";
 import type { AuthedUser } from "../middleware/requireAuth";
 
 const router = express.Router();
@@ -24,7 +25,8 @@ const RUNTIMES = new Set(["auto", "static", "node", "python", "php", "go", "dock
 
 // ─── POST /api/sites/upload ──────────────────────────────────────────────────
 // ZIP deployments. This router is mounted behind requireAuth.
-router.post("/upload", upload.single("project"), async (req: any, res) => {
+// ticketFileCheck: on a desktop machine that requires tickets, the ZIP must be the one the ticket names.
+router.post("/upload", upload.single("project"), ticketFileCheck, async (req: any, res) => {
   const user: AuthedUser = req.user;
   const file = req.file;
 

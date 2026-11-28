@@ -1,7 +1,8 @@
 /**
  * Terminals on connected servers, over the API's WebSocket gateway (/ws).
  *
- *   → { type: "ssh.open", serverId, cols, rows, password?, passphrase? }
+ *   → { type: "ssh.open", serverId, cols, rows, password?, passphrase?, ticket? }
+ *        ticket: on a desktop machine that requires tickets, a `change` ticket (checked in the gateway)
  *   ← { type: "ssh.opened", sessionId, serverId, recording, idleMinutes }
  *   ← { channel: "ssh", id: sessionId, payload: { data } }           output
  *   → { type: "ssh.input", id: sessionId, data }

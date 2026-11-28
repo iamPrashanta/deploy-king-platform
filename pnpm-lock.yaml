@@ -50,6 +50,9 @@ importers:
       '@dbbkp/security':
         specifier: workspace:*
         version: link:../../packages/security
+      '@dbbkp/tickets':
+        specifier: workspace:*
+        version: link:../../packages/tickets
       '@dbbkp/utils':
         specifier: workspace:*
         version: link:../../packages/utils

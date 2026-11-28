@@ -13,6 +13,7 @@ import { BASE_DOMAIN } from "../config";
 import { enqueueDeploy } from "../services/deploy";
 import { siteDocRoot } from "../services/validation";
 import { extractProjectZip, UnsafeArchiveError } from "../services/zipsite";
+import { ticketFileCheck } from "../services/tickets";
 import { ArgError, checkArgs } from "../mcp/schema";
 
 /**
@@ -209,7 +210,8 @@ async function tokenFor(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-router.post("/upload", tokenFor, zipUpload.single("project"), async (req: Request, res: Response) => {
+// ticketFileCheck: on a desktop machine that requires tickets, the ZIP must be the one the ticket names.
+router.post("/upload", tokenFor, zipUpload.single("project"), ticketFileCheck, async (req: Request, res: Response) => {
   const auth: TokenAuth = (req as any).tokenAuth;
   const file = (req as any).file as { path: string; size: number } | undefined;
   const ip = clientIp(req);

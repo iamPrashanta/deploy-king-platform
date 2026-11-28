@@ -91,8 +91,10 @@ export type AuditAction =
   | "file_upload"
   | "file_delete"
   | "folder_create"
-  // tickets agent: Deploy King Desktop (the local admin, tickets)
-  | "user_update";
+  // tickets agent: Deploy King Desktop (the local admin, tickets: apps/api/src/services/tickets.ts)
+  | "user_update"
+  | "ticket_refused"
+  | "ticket_wrong_file";
 
 export interface AuditContext {
   /** UUID of the user performing the action */

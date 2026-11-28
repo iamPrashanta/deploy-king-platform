@@ -15,6 +15,12 @@
  *   { type: "subscribe", channel: "terminal", id: "<sessionId>", data: "<stdin>" }
  *   { type: "subscribe", channel: "containers", id: "<containerId>" }
  *
+ * Terminals: { type: "terminal.open", id: "<container>", ticket? }, then terminal.input / .resize / .close.
+ * On a desktop machine that requires tickets (DESKTOP_MODE with DESKTOP_REQUIRE_TICKETS), the message
+ * that opens a terminal carries a `change` ticket as `ticket`; without a valid one the answer is
+ *   { type: "ticket.refused", for: "terminal.open", code: "ticket_required" | ..., error: "<plain English>" }
+ * (for ssh.open: an ssh.error with that code). One ticket opens one terminal. See services/tickets.ts.
+ *
  * Message envelope (outbound to client):
  *   { channel: "logs",      id, payload: { type, message, ts } }
  *   { channel: "metrics",   id, payload: { cpu, memory, disk, ts } }
@@ -36,6 +42,7 @@ import { logAudit } from "@dbbkp/audit";
 import { hasPermission, PERMISSIONS } from "../utils/rbac";
 import { ExecutionBroker } from "@dbbkp/runner";
 import { handleSshMessage, closeSocketSessions, startSshHousekeeping } from "./ssh";
+import { checkWsTicket } from "../services/tickets";
 
 const docker = new Docker();
 
@@ -269,6 +276,20 @@ export function setupWebSocketGateway(httpServer: HttpServer) {
       }
 
       const { type, channel, id, data, cols, rows } = msg;
+
+      // On a desktop machine that requires tickets, the message that opens a terminal (terminal.open,
+      // ssh.open) carries a `change` ticket as `ticket`, or it is refused. Does nothing otherwise.
+      const ticket = await checkWsTicket(msg, { userId: user!.sub, ip: (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0] || req.socket.remoteAddress || null });
+      if (ticket.ok === false) {
+        ws.send(
+          JSON.stringify(
+            typeof type === "string" && type.startsWith("ssh.")
+              ? { type: "ssh.error", serverId: typeof msg.serverId === "string" ? msg.serverId : "", code: ticket.code, message: ticket.message }
+              : { type: "ticket.refused", for: typeof type === "string" ? type.slice(0, 60) : null, code: ticket.code, error: ticket.message }
+          )
+        );
+        return;
+      }
 
       // ── subscribe to a channel ────────────────────────────────────────────
       if (type === "subscribe") {
