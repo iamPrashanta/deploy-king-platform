@@ -19,6 +19,7 @@ import {
 import { hostingQueue } from "../queues";
 import { verifyToken } from "../middleware/requireAuth";
 import { desktopModeOn } from "./desktopKey";
+import { appNameOf, askTicket, controlConfig, controlKeys, registerInBackground, serverControlOn, type ControlConfig } from "./serverControl";
 
 /**
  * Tickets in the machine's API (Deploy King Desktop with a Deploy King account).
@@ -36,7 +37,11 @@ import { desktopModeOn } from "./desktopKey";
  *   6. for a ZIP upload: the bytes on disk have that SHA-256 (ticketFileCheck, after the upload)
  *
  * The keys file and the device file are read on every call, so the app can rewrite them (a new
- * signing key, a new sign-in) without a restart. Outside desktop mode nothing here is mounted.
+ * signing key, a new sign-in) without a restart.
+ *
+ * A server install linked to a control server (SERVER_CONTROL=true, see serverControl.ts) uses the
+ * same gate, except that the API asks the control server for the ticket itself, and the keys and the
+ * device id come from the control server and the install's settings. Otherwise nothing is mounted.
  */
 export const DEFAULT_TICKET_KEYS_FILE = "/etc/deploy-king/ticket-keys.json";
 export const DEFAULT_DEVICE_FILE = "/etc/deploy-king/device-id";
@@ -98,7 +103,13 @@ export function readDeviceId(file = deviceFile()): string | null {
  * Marks a nonce as used, on the Redis connection the job queues already hold. True when this was
  * its first use. The mark lives a little longer than the ticket can be accepted.
  */
+let takeNonceImpl: ((nonce: string, ttlSeconds: number) => Promise<boolean>) | null = null;
+/** Tests only: keep used nonces somewhere else than Redis. */
+export function setNonceTakerForTests(f: typeof takeNonceImpl) {
+  takeNonceImpl = f;
+}
 async function takeNonce(nonce: string, ttlSeconds: number): Promise<boolean> {
+  if (takeNonceImpl) return takeNonceImpl(nonce, ttlSeconds);
   const client = await hostingQueue.client;
   return (await client.set(`dk:ticket:nonce:${nonce}`, "1", "EX", ttlSeconds, "NX")) === "OK";
 }
@@ -118,7 +129,8 @@ export type Refusal = {
   ok: false;
   /** 403 for every refusal of the contract; 503 when the check itself could not be done. */
   status: 403 | 503;
-  code: TicketCode | "ticket_check_failed";
+  /** A ticket code, ticket_check_failed, or (server control) the control server's own refusal code. */
+  code: TicketCode | "ticket_check_failed" | (string & {});
   message: string;
   /** What the ticket said about itself, for the audit log. Not trusted unless `verified`. */
   ticket?: Partial<TicketFields>;
@@ -138,17 +150,24 @@ function claimed(wire: string): Partial<TicketFields> | undefined {
   }
 }
 
+/** Where the keys and the device id come from: the desktop's files, or (server control) the control server and the settings. */
+export type TicketSource = { keys: () => Promise<PublicKey[]>; freshKeys?: () => Promise<PublicKey[]>; device: () => string | null };
+const desktopSource: TicketSource = { keys: () => readTicketKeys(), device: () => readDeviceId() };
+const controlSource = (cfg: ControlConfig): TicketSource => ({ keys: () => controlKeys(cfg), freshKeys: () => controlKeys(cfg, true), device: () => cfg.device });
+
 /** Checks 1 to 5 of the list at the top. `now` is in unix seconds. */
-export async function checkTicket(wire: unknown, needed: Needed, now: number = Math.floor(Date.now() / 1000)): Promise<TicketCheck> {
+export async function checkTicket(wire: unknown, needed: Needed, now: number = Math.floor(Date.now() / 1000), source: TicketSource = desktopSource): Promise<TicketCheck> {
   if (wire === undefined || wire === null || wire === "") return refusal("ticket_required");
   if (typeof wire !== "string") return refusal("ticket_invalid");
 
-  const v = verifyTicket(wire, await readTicketKeys(), now);
+  let v = verifyTicket(wire, await source.keys(), now);
+  // Signed by a key this server has not seen yet (the control server rotated its key): ask for the keys again, once.
+  if (v.ok === false && v.code === "ticket_invalid" && source.freshKeys) v = verifyTicket(wire, await source.freshKeys(), now);
   if (v.ok === false) return refusal(v.code, { ticket: claimed(wire) });
   const f = v.fields;
   const seen = { ticket: f, verified: true };
 
-  const device = readDeviceId();
+  const device = source.device();
   if (!device) {
     return refusal("ticket_wrong_device", { ...seen, message: "This Deploy King machine does not know yet which computer it runs on. Open the Deploy King app and sign in again." });
   }
@@ -281,7 +300,8 @@ export function ticketGate(): RequestHandler {
     }
     if (!cls.ticket) return next();
     const needed: Needed = cls;
-    checkTicket(req.headers[TICKET_HEADER], needed)
+    const check = serverControlOn() ? controlCheck(needed, req.body) : checkTicket(req.headers[TICKET_HEADER], needed);
+    check
       .then((r) => {
         if (r.ok === false) return refuse(req, res, needed, r);
         (req as any).dkTicket = r.fields;
@@ -292,6 +312,21 @@ export function ticketGate(): RequestHandler {
         sendRefusal(req, res, { ok: false, status: 503, code: "ticket_check_failed", message: "The approval could not be checked right now, so nothing was done. Try again in a moment." });
       });
   };
+}
+
+/**
+ * Server control: ask the control server for this request's ticket, then check it like any other.
+ * Settings that are wrong refuse everything (and say so in the log), as an unreachable control server does.
+ */
+async function controlCheck(needed: Needed, body: unknown): Promise<TicketCheck> {
+  const cfg = controlConfig();
+  if ("error" in cfg) {
+    console.error(`[ServerControl] ${cfg.error}; nothing can be deployed or changed until it is fixed.`);
+    return { ok: false, status: 503, code: "control_not_configured", message: "This server's link to the Deploy King control server is not set up correctly, so nothing was done. Ask your admin." };
+  }
+  const t = await askTicket(cfg, needed, appNameOf(body));
+  if (t.ok === false) return { ok: false, status: t.status === 503 ? 503 : 403, code: t.code, message: t.message };
+  return checkTicket(t.data.ticket, needed, Math.floor(Date.now() / 1000), controlSource(cfg));
 }
 
 function sha256OfFile(file: string): Promise<string> {
@@ -334,6 +369,16 @@ export function ticketFileCheck(req: Request, res: Response, next: NextFunction)
  * DESKTOP_REQUIRE_TICKETS=true, so outside desktop mode the API is exactly what it was.
  */
 export function mountTickets(app: Express): boolean {
+  if (serverControlOn()) {
+    const cfg = controlConfig();
+    app.use(ticketGate());
+    if ("error" in cfg) console.error(`[ServerControl] ${cfg.error}: every deploy and change is refused until it is fixed.`);
+    else {
+      console.log(`[ServerControl] every deploy and change is approved by ${cfg.url} first (this server: ${cfg.device})`);
+      registerInBackground(cfg);
+    }
+    return true;
+  }
   if (!ticketsRequired()) {
     if (process.env.DESKTOP_REQUIRE_TICKETS === "true") console.warn("[Tickets] DESKTOP_REQUIRE_TICKETS is set without DESKTOP_MODE=true: tickets are NOT checked.");
     return false;
@@ -350,10 +395,11 @@ export function mountTickets(app: Express): boolean {
  * refused. Messages for a terminal that is already open, and subscriptions, pass.
  */
 export async function checkWsTicket(msg: any, who: { userId?: string | null; ip?: string | null }): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
-  if (!ticketsRequired()) return { ok: true };
+  const control = serverControlOn();
+  if (!control && !ticketsRequired()) return { ok: true };
   const cls = classifyWs(msg);
   if (!cls.ticket) return { ok: true };
-  const r = await checkTicket(msg?.ticket, cls).catch(
+  const r = await (control ? controlCheck(cls, msg) : checkTicket(msg?.ticket, cls)).catch(
     (): Refusal => ({ ok: false, status: 503, code: "ticket_check_failed", message: "The approval could not be checked right now, so nothing was done. Try again in a moment." })
   );
   if (r.ok === true) return { ok: true };

@@ -14,6 +14,9 @@
 #   sudo bash install.sh --mode existing-panel  # side by side even on a free server
 # More: --email you@example.com (Let's Encrypt), --version v3.1.0 (image tag or git ref),
 #       --repo <git url>, --ref <branch or tag>, --dir /opt/dbbkp
+# Server control (deploys and changes approved by a Deploy King control server first):
+#   --control-url https://control.example.com --control-token dkc_…   link this server
+#   --control-off                                                     unlink it again
 # One command on a fresh server:
 #   curl -fsSL https://raw.githubusercontent.com/iamPrashanta/deploy-king-platform/v3.x/scripts/install.sh | sudo bash -s -- --yes
 # ==============================================================================
@@ -31,6 +34,7 @@ GHCR_PREFIX="ghcr.io/iamprashanta/deploy-king"
 INSTALL_MODE=""      # clean | existing-panel
 USER_DOMAIN=""
 ACME_EMAIL_FLAG=""
+CONTROL_URL_FLAG=""; CONTROL_TOKEN_FLAG=""; CONTROL_OFF=false
 DRY_RUN=false
 FORCE=false        # install next to another control panel
 ASSUME_YES=false   # accept the plan without asking
@@ -45,6 +49,9 @@ while [[ $# -gt 0 ]]; do
     --mode)     need_value "$1" "${2:-}"; INSTALL_MODE="$2"; shift 2 ;;
     --domain)   need_value "$1" "${2:-}"; USER_DOMAIN="$2";  shift 2 ;;
     --email)    need_value "$1" "${2:-}"; ACME_EMAIL_FLAG="$2"; shift 2 ;;
+    --control-url)   need_value "$1" "${2:-}"; CONTROL_URL_FLAG="$2";   shift 2 ;;
+    --control-token) need_value "$1" "${2:-}"; CONTROL_TOKEN_FLAG="$2"; shift 2 ;;
+    --control-off)   CONTROL_OFF=true; shift ;;
     --images)   need_value "$1" "${2:-}"; IMAGES="$2";       shift 2 ;;
     --version)  need_value "$1" "${2:-}"; WANT_VERSION="$2"; shift 2 ;;
     --ref)      need_value "$1" "${2:-}"; GIT_REF="$2";      shift 2 ;;
@@ -653,6 +660,15 @@ ENVEOF
   env_set DK_SCAN_DIR "$INSTALL_DIR/scan"
   env_set DK_ACTION_REQUESTS_DIR "$INSTALL_DIR/actions/requests"
   env_set DK_ACTION_RESULTS_DIR "$INSTALL_DIR/actions/results"
+  # Server control: kept from the last run unless a flag changes it. The server's id is made once.
+  if $CONTROL_OFF; then
+    env_set SERVER_CONTROL false
+  elif [[ -n "$CONTROL_URL_FLAG$CONTROL_TOKEN_FLAG" ]]; then
+    env_set SERVER_CONTROL true
+    [[ -n "$CONTROL_URL_FLAG" ]] && env_set CONTROL_SERVER_URL "${CONTROL_URL_FLAG%/}"
+    [[ -n "$CONTROL_TOKEN_FLAG" ]] && env_set CONTROL_TOKEN "$CONTROL_TOKEN_FLAG"
+  fi
+  [[ -z "$(env_get DK_SERVER_ID)" ]] && env_set DK_SERVER_ID "srv-$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 20 || true)"
   # Optional overrides from the environment, e.g. a base image from a registry mirror.
   for key in DK_NODE_IMAGE DK_POSTGRES_IMAGE DK_REDIS_IMAGE DK_TRAEFIK_IMAGE; do
     [[ -n "${!key:-}" ]] && env_set "$key" "${!key}"
@@ -903,6 +919,9 @@ else
   echo -e "  ${BOLD}Apps${NC}          : http://<name>.localhost on this server only. For public addresses, run again with --domain example.com"
 fi
 echo -e "  ${BOLD}Mode${NC}          : ${YELLOW}${INSTALL_MODE}${NC}, images: ${IMAGES}"
+if [[ "$(env_get SERVER_CONTROL)" == "true" ]]; then
+  echo -e "  ${BOLD}Control${NC}       : deploys and changes are approved by ${CYAN}$(env_get CONTROL_SERVER_URL)${NC} first (this server: $(env_get DK_SERVER_ID))"
+fi
 if [[ ${#DETECTED_PANELS[@]} -gt 0 ]]; then
   echo -e "  ${BOLD}Coexisting with${NC}: ${YELLOW}${DETECTED_PANELS[*]}${NC}"
 fi
