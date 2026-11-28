@@ -15,9 +15,10 @@ import { desktopKeyMatches, desktopModeOn, readDesktopKey } from "../services/de
  *   POST /api/desktop/session      Authorization: Desktop <key>  → { token } a normal session for the local admin
  *   POST /api/desktop/agent-token  Authorization: Desktop <key>  → { token } a dk_ token for the desktop assistant
  *
- * The local admin has no password anyone knows: the app signs it in with the key. In desktop mode
- * POST /api/auth/register is closed too, so no other program on the computer can claim the empty
- * installation before the app does.
+ * The local admin has no password anyone knows: the app signs it in with the key. That holds for the
+ * admin the API made at its first start too: on its first use here its first password is replaced
+ * and it is no longer asked to change it. In desktop mode POST /api/auth/register is closed too, so
+ * no other program on the computer can claim the empty installation before the app does.
  */
 export const LOCAL_ADMIN = { username: "local", email: "local@desktop.localhost" } as const;
 export const DESKTOP_TOKEN_NAME = "Deploy King Desktop assistant";
@@ -42,17 +43,38 @@ function requireDesktopKey(req: Request, res: Response, next: NextFunction) {
   res.status(401).json({ error: "Wrong or missing desktop key." });
 }
 
+/** A password nobody is told: the local admin is signed in with the key only. */
+const unknownPassword = () => bcrypt.hash(crypto.randomBytes(32).toString("base64url"), 12);
+
 /** The built-in local admin: the first admin that is not suspended, made on first use when there is none. */
-async function localAdmin() {
+async function localAdmin(ip?: string) {
   const [have] = await db
     .select()
     .from(users)
     .where(and(eq(users.role, "admin"), isNull(users.suspendedAt)))
     .orderBy(asc(users.createdAt))
     .limit(1);
-  if (have) return have;
+  if (have) {
+    if (!have.mustChangePassword) return have;
+    // The admin the API makes at its first start has a first password and must change it at the first
+    // sign-in. On a desktop machine nobody signs in with a password: the key is the credential, and a
+    // session or token that first needs a password change is of no use to the app. So the change is no
+    // longer asked for, and the first password (it is in the settings file and may be in the log) stops
+    // working, like the password of the admin made below.
+    const [fixed] = await db
+      .update(users)
+      .set({ mustChangePassword: false, passwordHash: await unknownPassword(), updatedAt: new Date() })
+      .where(and(eq(users.id, have.id), eq(users.mustChangePassword, true)))
+      .returning();
+    if (fixed) {
+      console.log(`[Desktop] "${fixed.username}" is the local admin: its first password is replaced and no password change is asked for.`);
+      logAudit("user_update", { actorId: fixed.id, actorEmail: fixed.email, targetId: fixed.id, targetType: "user", targetName: fixed.username, metadata: { desktop: true, passwordChangeNoLongerRequired: true, firstPasswordReplaced: true }, ...(ip ? { ip } : {}) });
+    }
+    // Not updated: a second request did it at the same moment.
+    return fixed ?? { ...have, mustChangePassword: false };
+  }
   // A random password nobody is told: this account is signed in with the key only.
-  const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString("base64url"), 12);
+  const passwordHash = await unknownPassword();
   const [made] = await db
     .insert(users)
     .values({ username: LOCAL_ADMIN.username, email: LOCAL_ADMIN.email, passwordHash, role: "admin", teamRole: "admin", allApps: true })
@@ -74,7 +96,7 @@ export function desktopRouter() {
 
   r.post("/session", async (req, res) => {
     try {
-      const u = await localAdmin();
+      const u = await localAdmin(req.ip);
       const s = await issueSession(u);
       logAudit("login", { actorId: u.id, actorEmail: u.email, ip: req.ip, userAgent: "Deploy King Desktop", metadata: { via: "desktop-key" } });
       res.json({ token: s.token, user: s.user });
@@ -86,7 +108,7 @@ export function desktopRouter() {
 
   r.post("/agent-token", async (req, res) => {
     try {
-      const u = await localAdmin();
+      const u = await localAdmin(req.ip);
       // One token for the desktop assistant at a time: the old one stops working.
       const old = await db
         .update(apiTokens)

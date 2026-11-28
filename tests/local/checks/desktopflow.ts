@@ -1,6 +1,7 @@
 // Deploy King Desktop's key in the API (DESKTOP_MODE): the key check on fixed inputs, then the two
 // routes over HTTP against a real, EMPTY database: no key, a wrong key, register closed, the local
-// admin's session, the assistant token and its rotation, too many wrong keys, and desktop mode off.
+// admin's session, the assistant token and its rotation, the admin made at the first start (no forced
+// password change on a desktop machine), too many wrong keys, and desktop mode off.
 //   run by freshdb.sh (cwd apps/api)
 import fs from "node:fs";
 import os from "node:os";
@@ -87,6 +88,58 @@ async function main() {
   const t2 = (await (await post("/api/desktop/agent-token", `Desktop ${KEY}`)).json()) as any;
   pass((await verifyApiToken(t1.token)) === null && (await verifyApiToken(t2.token))?.scope === "deploy", "a new assistant token stops the old one");
   pass((await post("/api/desktop/agent-token")).status === 401, "the assistant token needs the key too");
+
+  // ── The admin the API makes at its first start ──
+  // It has a first password and must change it at the first sign-in. On a desktop machine the key is
+  // the credential: that admin becomes the local admin, without a forced change, and its first password stops working.
+  const queues = await import(root + "/src/queues");
+  for (const q of Object.values(queues) as any[]) q?.on?.("error", () => {}); // no Redis here
+  const { appRouter } = await import(root + "/src/trpc");
+  const bcrypt = (await import(from("bcryptjs"))).default;
+  const { ensureFirstAdmin } = await import(from("@dbbkp/db"));
+  const callerFor = (user: any, apiToken: any = null) => appRouter.createCaller({ user: { ...user, mustChangePassword: false }, ip: null, apiToken });
+  const refusedFor = async (fn: () => Promise<unknown>) => fn().then(() => "", (e: any) => String(e?.message ?? e));
+  await db.delete(users); // sessions and tokens go with it
+  const FIRST = "First-Start-Passw0rd-1";
+  process.env.INITIAL_ADMIN_USERNAME = "admin";
+  process.env.INITIAL_ADMIN_PASSWORD = FIRST;
+  await ensureFirstAdmin();
+  const [first] = await db.select().from(users);
+  pass(first?.username === "admin" && first.mustChangePassword === true && (await bcrypt.compare(FIRST, first.passwordHash)), "the first start makes an admin that must change its first password");
+  const login1 = await post("/api/auth/login", undefined, { username: "admin", password: FIRST });
+  const stuck = (await verifyToken(((await login1.json()) as any).token))!;
+  pass(login1.ok && (await refusedFor(() => callerFor(stuck).sites.list())) === "PASSWORD_ROTATION_REQUIRED", "signed in with that password, it can do nothing before the change (as on a server)");
+
+  const r3 = await post("/api/desktop/session", `Desktop ${KEY}`);
+  const b3 = (await r3.json()) as any;
+  const who3 = await verifyToken(b3.token);
+  const [fixed] = await db.select().from(users);
+  pass(r3.ok && who3?.sub === first.id && (await db.select().from(users)).length === 1, "with the key, that admin is the local admin (no second account is made)", JSON.stringify(who3));
+  pass(fixed.mustChangePassword === false && b3.user?.mustChangePassword === false, "it is no longer asked to change its password", JSON.stringify(b3.user));
+  pass((await refusedFor(() => callerFor(who3).sites.list())) === "" && (await refusedFor(() => callerFor(who3).team.me())) === "", "so the app's session works in the panel's API");
+  pass(!(await bcrypt.compare(FIRST, fixed.passwordHash)) && (await post("/api/auth/login", undefined, { username: "admin", password: FIRST })).status === 401, "and its first password no longer signs in");
+  const t3 = (await (await post("/api/desktop/agent-token", `Desktop ${KEY}`)).json()) as any;
+  const a3 = await verifyApiToken(t3.token);
+  const asAgent = a3 ? callerFor({ sub: a3.user.sub, sid: `token:${a3.tokenId}`, username: a3.user.username, role: a3.user.role }, { id: a3.tokenId, scope: a3.scope }) : null;
+  pass(!!asAgent && (await refusedFor(() => asAgent.sites.list())) === "", "the assistant's token works too (no \"must change their password\")");
+
+  // The same when the assistant's token is the first thing the app asks for.
+  await db.delete(users);
+  await ensureFirstAdmin();
+  const t4 = (await (await post("/api/desktop/agent-token", `Desktop ${KEY}`)).json()) as any;
+  const a4 = await verifyApiToken(t4.token);
+  const [fixed4] = await db.select().from(users);
+  const asAgent4 = a4 ? callerFor({ sub: a4.user.sub, sid: `token:${a4.tokenId}`, username: a4.user.username, role: a4.user.role }, { id: a4.tokenId, scope: a4.scope }) : null;
+  pass(fixed4.mustChangePassword === false && !(await bcrypt.compare(FIRST, fixed4.passwordHash)) && !!asAgent4 && (await refusedFor(() => asAgent4.sites.list())) === "", "asking for the assistant's token first lifts the forced change as well");
+
+  // An admin who chose a password keeps it: only a first password that was never changed is replaced.
+  const CHOSEN = "Chosen-By-The-Admin-12345";
+  const { eq } = await import(from("drizzle-orm"));
+  await db.update(users).set({ passwordHash: await bcrypt.hash(CHOSEN, 4) }).where(eq(users.id, fixed4.id));
+  await post("/api/desktop/session", `Desktop ${KEY}`);
+  const [kept] = await db.select().from(users);
+  pass(await bcrypt.compare(CHOSEN, kept.passwordHash), "a password the admin chose is left alone");
+  delete process.env.INITIAL_ADMIN_PASSWORD;
 
   // A new key in the file works at once (rotation needs no restart), and the old one stops.
   const KEY2 = "r".repeat(43);
