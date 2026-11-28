@@ -1,43 +1,63 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# DBBKP Platform Installer v2.0
-# Production-safe. Coexistence-aware. Rollback-capable.
+# Deploy King server installer
+# Coexistence-aware: lists what already runs here and changes nothing until you confirm.
+# Safe to run again: it keeps the passwords, ports and data of an existing install, and updates it.
 # ==============================================================================
 # Usage:
-#   sudo bash install.sh                   # Auto-detect mode
-#   sudo bash install.sh --mode agent-only # Agent only (no panel)
-#   sudo bash install.sh --domain example.com
-#   sudo bash install.sh --dry-run        # Show plan without making changes
-#   sudo bash install.sh --yes            # Accept the plan without being asked
-#   sudo bash install.sh --force          # Install next to another control panel (side by side)
+#   sudo bash install.sh                        # build the images from source on this server
+#   sudo bash install.sh --domain example.com   # panel at portal.example.com, apps at <name>.example.com
+#   sudo bash install.sh --images ghcr          # pull the published images instead of building
+#   sudo bash install.sh --dry-run              # show the plan, change nothing
+#   sudo bash install.sh --yes                  # accept the plan without being asked
+#   sudo bash install.sh --force                # install next to another control panel (side by side)
+#   sudo bash install.sh --mode existing-panel  # side by side even on a free server
+# More: --email you@example.com (Let's Encrypt), --version v3.1.0 (image tag or git ref),
+#       --repo <git url>, --ref <branch or tag>, --dir /opt/dbbkp
+# One command on a fresh server:
+#   curl -fsSL https://raw.githubusercontent.com/iamPrashanta/deploy-king-platform/v3.x/scripts/install.sh | sudo bash -s -- --yes
 # ==============================================================================
 
 set -Eeo pipefail
 
-DBBKP_VERSION="2.0.0"
+DBBKP_VERSION="3.0.0"
 INSTALL_DIR="/opt/dbbkp"
-STATE_FILE="$INSTALL_DIR/.install-state.json"
 LOG_FILE="/var/log/dbbkp-install.log"
 APP_USER="dbbkp"
-DB_NAME="dbbkp_panel"
+REPO_URL="https://github.com/iamPrashanta/deploy-king-platform.git"
+GHCR_PREFIX="ghcr.io/iamprashanta/deploy-king"
 
 # ─── Parse flags ──────────────────────────────────────────────────────────────
-INSTALL_MODE=""      # clean | existing-panel | docker-only | agent-only
+INSTALL_MODE=""      # clean | existing-panel
 USER_DOMAIN=""
+ACME_EMAIL_FLAG=""
 DRY_RUN=false
 FORCE=false        # install next to another control panel
 ASSUME_YES=false   # accept the plan without asking
+IMAGES=""          # source (build here, the default) | ghcr (pull the published images)
+WANT_VERSION=""    # ghcr: image tag; source: git ref, when --ref is not given
+GIT_REF=""
+REPO_FLAG=""
 
+need_value() { [[ -n "$2" && "$2" != --* ]] || { echo "Missing value for $1" >&2; exit 1; }; }
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --mode)     INSTALL_MODE="$2"; shift 2 ;;
-    --domain)   USER_DOMAIN="$2";  shift 2 ;;
+    --mode)     need_value "$1" "${2:-}"; INSTALL_MODE="$2"; shift 2 ;;
+    --domain)   need_value "$1" "${2:-}"; USER_DOMAIN="$2";  shift 2 ;;
+    --email)    need_value "$1" "${2:-}"; ACME_EMAIL_FLAG="$2"; shift 2 ;;
+    --images)   need_value "$1" "${2:-}"; IMAGES="$2";       shift 2 ;;
+    --version)  need_value "$1" "${2:-}"; WANT_VERSION="$2"; shift 2 ;;
+    --ref)      need_value "$1" "${2:-}"; GIT_REF="$2";      shift 2 ;;
+    --repo)     need_value "$1" "${2:-}"; REPO_FLAG="$2";    shift 2 ;;
+    --dir)      need_value "$1" "${2:-}"; INSTALL_DIR="$2";  shift 2 ;;
     --dry-run)  DRY_RUN=true;      shift   ;;
     --force)    FORCE=true;        shift   ;;
     --yes|-y)   ASSUME_YES=true;   shift   ;;
-    *)          shift ;;
+    -h|--help)  sed -n '2,21p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)          echo "Unknown option: $1 (see --help)" >&2; exit 1 ;;
   esac
 done
+STATE_FILE="$INSTALL_DIR/.install-state.json"
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; RED='\033[0;31m'
@@ -47,14 +67,20 @@ _ts()   { date '+%Y-%m-%d %H:%M:%S'; }
 log()   { echo -e "${BLUE}[INFO]${NC} $1" | tee -a "$LOG_FILE"; }
 ok()    { echo -e "${GREEN}[OK]${NC}   $1" | tee -a "$LOG_FILE"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1" | tee -a "$LOG_FILE"; }
-err()   { echo -e "${RED}[ERR]${NC}  $1" >&2 | tee -a "$LOG_FILE"; exit 1; }
+err()   { echo -e "${RED}[ERR]${NC}  $1" | tee -a "$LOG_FILE" >&2; exit 1; }
 step()  { echo -e "\n${BOLD}${CYAN}==> $1${NC}" | tee -a "$LOG_FILE"; }
 info()  { echo -e "    ${YELLOW}$1${NC}"; }
 dry()   { echo -e "    ${CYAN}[DRY-RUN]${NC} $1"; }
 
+# A value from the .env of an existing install (empty when there is none).
+env_get() {
+  [[ -f "$INSTALL_DIR/.env" ]] && sed -n "s/^$1=//p" "$INSTALL_DIR/.env" | tail -n 1
+  return 0
+}
+
 # ─── Dry-run guard ─────────────────────────────────────────────────────────────
 run() {
-  if $DRY_RUN; then dry "$*"; else eval "$@"; fi
+  if $DRY_RUN; then dry "$*"; else eval "$*"; fi
 }
 
 # ─── Root check ───────────────────────────────────────────────────────────────
@@ -62,20 +88,36 @@ if [[ "$EUID" -ne 0 ]]; then
   err "This installer must be run as root (sudo bash install.sh)"
 fi
 
-mkdir -p "$(dirname "$LOG_FILE")" "$INSTALL_DIR"
-echo "=== DBBKP Install Log — $(_ts) ===" >> "$LOG_FILE"
+mkdir -p "$(dirname "$LOG_FILE")"
+$DRY_RUN || mkdir -p "$INSTALL_DIR"
+echo "=== Deploy King install log — $(_ts) ===" >> "$LOG_FILE"
+
+# Flags not given on a second run keep what the first run chose.
+[[ -z "$IMAGES" ]] && IMAGES=$(env_get DK_IMAGES)
+IMAGES="${IMAGES:-source}"
+case "$IMAGES" in
+  source|ghcr) ;;
+  *) err "--images must be 'source' (build on this server) or 'ghcr' (pull the published images)" ;;
+esac
+case "$INSTALL_MODE" in
+  ""|clean|existing-panel) ;;
+  agent-only) err "--mode agent-only is not available yet: the agent has no published image. Nothing has been changed." ;;
+  *) err "--mode must be 'clean' or 'existing-panel'" ;;
+esac
+[[ -z "$USER_DOMAIN" ]] && USER_DOMAIN=$(env_get DK_DOMAIN)
+[[ -n "$USER_DOMAIN" && ! "$USER_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && err "--domain must be a host name such as example.com"
 
 # ─── Banner ───────────────────────────────────────────────────────────────────
 echo -e "${BOLD}${BLUE}"
 cat << 'EOF'
-    ____  ____  ____  __ __ ____
-   / __ \/ __ )/ __ )/ //_// __ \
-  / / / / __  / __  / ,<  / /_/ /
- / /_/ / /_/ / /_/ / /| |/ ____/
-/_____/_____/_____/_/ |_/_/
-
+    ____             __               __ __ _
+   / __ \___  ____  / /___  __  __   / //_/(_)___  ____ _
+  / / / / _ \/ __ \/ / __ \/ / / /  / ,<  / / __ \/ __ `/
+ / /_/ /  __/ /_/ / / /_/ / /_/ /  / /| |/ / / / / /_/ /
+/_____/\___/ .___/_/\____/\__, /  /_/ |_/_/_/ /_/\__, /
+          /_/            /____/                 /____/
 EOF
-echo -e "  Platform Installer v${DBBKP_VERSION}${NC}"
+echo -e "  Server installer v${DBBKP_VERSION}${NC}"
 echo ""
 
 # ==============================================================================
@@ -88,11 +130,13 @@ step "Phase 1: Pre-flight Checks"
 if [[ ! -f /etc/os-release ]]; then
   err "Cannot detect OS. Only Ubuntu 20.04+ and Debian 11+ are supported."
 fi
-. /etc/os-release
-if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
-  err "Unsupported OS: $PRETTY_NAME. Only Ubuntu and Debian are supported."
+# Read in a subshell: os-release sets VERSION, ID and more, which must not leak into this script.
+OS_ID=$(. /etc/os-release; echo "${ID:-}")
+OS_NAME=$(. /etc/os-release; echo "${PRETTY_NAME:-unknown}")
+if [[ "$OS_ID" != "ubuntu" && "$OS_ID" != "debian" ]]; then
+  err "Unsupported OS: $OS_NAME. Only Ubuntu and Debian are supported."
 fi
-ok "OS: $PRETTY_NAME"
+ok "OS: $OS_NAME"
 
 # ── Architecture ──────────────────────────────────────────────────────────────
 ARCH=$(uname -m)
@@ -102,8 +146,10 @@ fi
 ok "Arch: $ARCH"
 
 # ── Resource checks ───────────────────────────────────────────────────────
-RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
-DISK_GB=$(df -BG "$INSTALL_DIR" | awk 'NR==2 {gsub("G",""); print $4}')
+if command -v free &>/dev/null; then RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
+else RAM_MB=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo); fi   # minimal images have no procps
+DISK_AT="$INSTALL_DIR"; while [[ ! -d "$DISK_AT" ]]; do DISK_AT=$(dirname "$DISK_AT"); done   # a dry run creates nothing
+DISK_GB=$(df -BG "$DISK_AT" | awk 'NR==2 {gsub("G",""); print $4}')
 CPU_CORES=$(nproc)
 
 if [[ "$RAM_MB" -lt 900 ]]; then
@@ -122,12 +168,22 @@ ok "Resources: ${RAM_MB}MB RAM, ${DISK_GB}GB disk, ${CPU_CORES} CPU cores"
 
 # ── What already runs on this server (read only: nothing here changes anything) ─
 # Which program listens on a TCP port. Prints nothing when the port is free.
+# Without ss (a minimal image), the kernel's own list of listening sockets is read instead.
 port_owner() {
-  local line name
-  line=$(ss -H -ltnp 2>/dev/null | awk -v p="$1" '{ n = split($4, a, ":"); if (a[n] == p) { print; exit } }') || true
-  [[ -z "$line" ]] && return 0
-  name=$(sed -n 's/.*users:(("\([^"]*\)".*/\1/p' <<<"$line")
-  echo "${name:-another program}"
+  local line name hex
+  if command -v ss &>/dev/null; then
+    line=$(ss -H -ltnp 2>/dev/null | awk -v p="$1" '{ n = split($4, a, ":"); if (a[n] == p) { print; exit } }') || true
+    [[ -z "$line" ]] && return 0
+    name=$(sed -n 's/.*users:(("\([^"]*\)".*/\1/p' <<<"$line")
+    echo "${name:-another program}"
+  else
+    hex=$(printf '%04X' "$1")
+    # state 0A is LISTEN; the local address is the second column, ADDR:PORT in hex
+    cat /proc/net/tcp /proc/net/tcp6 2>/dev/null \
+      | awk -v h=":$hex" '$4 == "0A" && substr($2, length($2) - 4) == h { found = 1 } END { exit !found }' \
+      && echo "another program"
+    return 0
+  fi
 }
 
 # Another control panel owns the web server's configuration and rewrites it; two panels on one server undo each other's work.
@@ -153,6 +209,16 @@ command -v caddy &>/dev/null                                   && WEB_SERVERS+=(
 
 PORT80_OWNER=$(port_owner 80)
 PORT443_OWNER=$(port_owner 443)
+# Running again on an existing install: its own proxy on 80/443 is not "something else".
+# Asked of Docker, because ss cannot always name the process that holds a published port.
+own_port() {
+  [[ "$(env_get "$1")" == "$2" ]] || return 1
+  command -v docker &>/dev/null && docker port dbbkp-traefik 2>/dev/null | grep -qE ":$2\$"
+}
+if [[ -f "$INSTALL_DIR/.env" ]]; then
+  [[ -n "$PORT80_OWNER" ]] && own_port TRAEFIK_HTTP_PORT 80 && PORT80_OWNER=""
+  [[ -n "$PORT443_OWNER" ]] && own_port TRAEFIK_HTTPS_PORT 443 && PORT443_OWNER=""
+fi
 
 # Addresses the existing web server answers for. Names only; no file is copied and no secret is read.
 existing_sites() {
@@ -210,10 +276,12 @@ fi
 NEEDS_SIDE_BY_SIDE=false
 [[ -n "$PORT80_OWNER$PORT443_OWNER" || ${#DETECTED_PANELS[@]} -gt 0 ]] && NEEDS_SIDE_BY_SIDE=true
 
+# Running again: keep the mode the first install chose, unless --mode says otherwise.
+[[ -z "$INSTALL_MODE" ]] && INSTALL_MODE=$(env_get DK_INSTALL_MODE)
 if [[ -z "$INSTALL_MODE" ]]; then
   if $NEEDS_SIDE_BY_SIDE; then INSTALL_MODE="existing-panel"; else INSTALL_MODE="clean"; fi
 elif [[ "$INSTALL_MODE" == "clean" && -n "$PORT80_OWNER$PORT443_OWNER" ]]; then
-  err "--mode clean needs ports 80 and 443, but they are used by ${PORT80_OWNER:-$PORT443_OWNER}. Nothing has been changed. Run without --mode to install side by side."
+  err "A clean install needs ports 80 and 443, but they are used by ${PORT80_OWNER:-$PORT443_OWNER}. Nothing has been changed. Run with --mode existing-panel to install side by side."
 fi
 
 if [[ "$INSTALL_MODE" == "existing-panel" ]]; then
@@ -222,12 +290,12 @@ fi
 
 ok "Install mode: ${BOLD}$INSTALL_MODE${NC}"
 
-# ── Existing dbbkp installation check ─────────────────────────────────────────
-if [[ -f "$STATE_FILE" ]]; then
-  warn "Existing dbbkp installation detected at $INSTALL_DIR"
-  warn "To upgrade, run: bash scripts/update.sh"
-  warn "To reinstall, remove $STATE_FILE first."
+
+# ── Existing installation ─────────────────────────────────────────────────────
+EXISTING_INSTALL=false
+if [[ -f "$INSTALL_DIR/.env" ]]; then
   EXISTING_INSTALL=true
+  warn "Deploy King is already installed at $INSTALL_DIR. Running again keeps its data, passwords and ports, and updates it."
 fi
 
 # ==============================================================================
@@ -240,7 +308,7 @@ find_free_port() {
   local port="$1"
   local max=$((port + 100))
   while [[ $port -lt $max ]]; do
-    if ! ss -tulpn 2>/dev/null | grep -q ":${port} "; then
+    if [[ -z "$(port_owner "$port")" ]]; then
       echo "$port"
       return
     fi
@@ -249,28 +317,33 @@ find_free_port() {
   err "Could not find free port starting from $1 within 100 attempts"
 }
 
-# Choose base ports based on mode
-if [[ "$INSTALL_MODE" == "clean" ]]; then
-  PANEL_PORT=$(find_free_port 3000)
-  API_PORT=$(find_free_port 4000)
-  TRAEFIK_HTTP=80
-  TRAEFIK_HTTPS=443
-else
-  # Coexistence: use high ports, never touch 80/443
-  PANEL_PORT=$(find_free_port 3100)
-  API_PORT=$(find_free_port 4100)
-  TRAEFIK_HTTP=$(find_free_port 8088)
-  TRAEFIK_HTTPS=$(find_free_port 8444)
+# A second run keeps the ports of the first (its own containers hold them now).
+PANEL_PORT=$(env_get PANEL_PORT)
+API_PORT=$(env_get API_PORT)
+TRAEFIK_HTTP=$(env_get TRAEFIK_HTTP_PORT)
+TRAEFIK_HTTPS=$(env_get TRAEFIK_HTTPS_PORT)
+if [[ "$(env_get DK_INSTALL_MODE)" != "$INSTALL_MODE" ]]; then
+  # new install, or the mode changed: choose again
+  PANEL_PORT=""; API_PORT=""; TRAEFIK_HTTP=""; TRAEFIK_HTTPS=""
 fi
 
-REDIS_PORT=$(find_free_port 6379)
-PG_PORT=$(find_free_port 5432)
+if [[ "$INSTALL_MODE" == "clean" ]]; then
+  PANEL_PORT=${PANEL_PORT:-$(find_free_port 3000)}
+  API_PORT=${API_PORT:-$(find_free_port 4000)}
+  TRAEFIK_HTTP=${TRAEFIK_HTTP:-80}
+  TRAEFIK_HTTPS=${TRAEFIK_HTTPS:-443}
+else
+  # Coexistence: use high ports, never touch 80/443
+  PANEL_PORT=${PANEL_PORT:-$(find_free_port 3100)}
+  API_PORT=${API_PORT:-$(find_free_port 4100)}
+  TRAEFIK_HTTP=${TRAEFIK_HTTP:-$(find_free_port 8088)}
+  TRAEFIK_HTTPS=${TRAEFIK_HTTPS:-$(find_free_port 8444)}
+fi
 
 ok "Panel:   :$PANEL_PORT"
-ok "API:     :$API_PORT"
+ok "API:     127.0.0.1:$API_PORT (this server only; browsers reach it through the panel)"
 ok "Traefik: :$TRAEFIK_HTTP / :$TRAEFIK_HTTPS"
-ok "Redis:   :$REDIS_PORT"
-ok "Postgres::$PG_PORT"
+info "PostgreSQL and Redis run in containers and take no port on this server."
 
 # ── The plan, and one question before anything is changed ────────────────────
 # Asks on the terminal even when the script itself arrives through a pipe (curl ... | bash).
@@ -291,6 +364,11 @@ echo ""
 echo -e "  ${BOLD}What the installer will do${NC}"
 echo "    - Install Docker if it is missing, and add the system user '$APP_USER'"
 echo "    - Create $INSTALL_DIR, /var/www/sites and /var/log/dbbkp"
+if [[ "${IMAGES:-source}" == "ghcr" ]]; then
+  echo "    - Download the Deploy King images from ghcr.io (${GHCR_PREFIX:-ghcr.io}-api, -worker, -panel)"
+else
+  echo "    - Get the Deploy King source and build its images on this server (a few minutes)"
+fi
 echo "    - Start its own containers: database, queue, proxy, API, worker, panel"
 if [[ "$INSTALL_MODE" == "clean" ]]; then
   echo "    - Take ports 80 and 443 for the proxy, and open them in the firewall"
@@ -304,9 +382,12 @@ echo "      and a helper that removes what you choose there, with a copy kept fo
 for line in "${LOW_RESOURCES[@]}"; do
   echo -e "    ${YELLOW}Note:${NC} $line"
 done
+if [[ "${IMAGES:-source}" == "source" && "${RAM_MB:-0}" -lt 1900 ]]; then
+  echo -e "    ${YELLOW}Note:${NC} Building the images needs about 2 GB of memory. With less, add swap first, or use --images ghcr."
+fi
 echo ""
 if [[ "${EXISTING_INSTALL:-false}" == true ]]; then
-  echo -e "    ${YELLOW}Note:${NC} Deploy King is already installed here. Continuing may overwrite its configuration."
+  echo -e "    ${YELLOW}Note:${NC} Deploy King is already installed here. Its data, passwords and ports are kept."
   echo ""
 fi
 if ! confirm "Continue with this plan?"; then
@@ -326,17 +407,22 @@ fi
 
 step "Phase 3: Generating Credentials"
 
-# Unique DB username to avoid collision with existing postgres users
-DB_USER="dbbkp_$(openssl rand -hex 3)"
-DB_PASS=$(openssl rand -base64 24 | tr -d '+/=' | head -c 28)
-REDIS_PASS=$(openssl rand -base64 24 | tr -d '+/=' | head -c 28)
-JWT_SECRET=$(openssl rand -base64 48 | tr -d '+/=')
-INTERNAL_SECRET=$(openssl rand -base64 32 | tr -d '+/=')
+# Kept from the first install when there is one: the database and the stored secrets depend on them.
+# Made from /dev/urandom with coreutils only: this runs before any package is installed.
+rand_hex() { head -c "$1" /dev/urandom | od -An -v -tx1 | tr -d ' \n'; }
+secret_hex() { local v; v=$(env_get "$1"); [[ -n "$v" ]] && echo "$v" || rand_hex "$2"; }
+POSTGRES_PASSWORD=$(secret_hex POSTGRES_PASSWORD 24)
+REDIS_PASSWORD=$(secret_hex REDIS_PASSWORD 24)
+JWT_SECRET=$(secret_hex JWT_SECRET 48)
+INTERNAL_SECRET=$(secret_hex INTERNAL_SECRET 32)
 # 32-byte hex master key for AES-256-GCM secrets store
-MASTER_KEY=$(openssl rand -hex 32)
-ADMIN_PASS=$(openssl rand -base64 12 | tr -d '+/=' | head -c 14)
+MASTER_KEY=$(secret_hex MASTER_KEY 32)
+GITHUB_WEBHOOK_SECRET=$(secret_hex GITHUB_WEBHOOK_SECRET 32)
+ADMIN_USER=$(env_get INITIAL_ADMIN_USERNAME); ADMIN_USER=${ADMIN_USER:-admin}
+ADMIN_PASS=$(env_get INITIAL_ADMIN_PASSWORD)
+[[ -z "$ADMIN_PASS" ]] && ADMIN_PASS=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16 || true)
 
-ok "Credentials generated (never stored in plaintext)"
+if $EXISTING_INSTALL; then ok "Credentials kept from the existing install"; else ok "Credentials generated (kept only in $INSTALL_DIR/.env, readable by root)"; fi
 
 # ==============================================================================
 # PHASE 4: INSTALL DEPENDENCIES
@@ -344,31 +430,48 @@ ok "Credentials generated (never stored in plaintext)"
 
 step "Phase 4: Installing System Dependencies"
 
+has_systemd() { [[ -d /run/systemd/system ]]; }
+version_ge() { [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" == "$2" ]]; }
+
 run "apt-get update -qq >/dev/null"
-run "apt-get install -y -qq curl wget git sudo jq openssl ca-certificates gnupg lsb-release python3-minimal >/dev/null"
+run "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl git jq openssl ca-certificates iproute2 python3-minimal >/dev/null"
 ok "Base packages installed"
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 if ! command -v docker &>/dev/null; then
-  log "Installing Docker via apt (docker.io + compose plugin)..."
-  run "apt-get install -y -qq docker.io docker-compose-plugin >/dev/null"
-  run "systemctl enable --now docker >/dev/null"
+  log "Installing Docker Engine with the Compose and Buildx plugins (get.docker.com)..."
+  run "curl -fsSL https://get.docker.com | sh >>'$LOG_FILE' 2>&1"
   ok "Docker installed"
 else
-  DOCKER_VER=$(docker --version | awk '{print $3}' | tr -d ',')
-  ok "Docker already installed: $DOCKER_VER"
+  ok "Docker already installed: $(docker --version | awk '{print $3}' | tr -d ',')"
 fi
 
-# Add dbbkp user to docker group
+if ! $DRY_RUN; then
+  if ! docker info &>/dev/null; then
+    if has_systemd; then
+      systemctl enable --now docker >/dev/null 2>&1 || true
+      sleep 2
+    fi
+    docker info &>/dev/null || err "Docker is installed but not running. Start it (systemctl start docker, or dockerd), then run the installer again."
+  fi
+
+  # Compose 2.24 or newer reads deploy/compose.yml (optional env files). Buildx builds the images.
+  if ! docker compose version &>/dev/null; then
+    apt-get install -y -qq docker-compose-plugin >/dev/null 2>&1 || apt-get install -y -qq docker-compose-v2 >/dev/null 2>&1 || true
+  fi
+  COMPOSE_VERSION=$(docker compose version --short 2>/dev/null | sed 's/^v//')
+  [[ -n "$COMPOSE_VERSION" ]] || err "Docker Compose is missing. Install Docker from https://get.docker.com, then run the installer again."
+  version_ge "$COMPOSE_VERSION" "2.24.0" || err "Docker Compose $COMPOSE_VERSION is too old (2.24 or newer is needed). Update Docker (https://get.docker.com), then run the installer again."
+  if [[ "$IMAGES" == "source" ]] && ! docker buildx version &>/dev/null; then
+    apt-get install -y -qq docker-buildx-plugin >/dev/null 2>&1 || apt-get install -y -qq docker-buildx >/dev/null 2>&1 || true
+    docker buildx version &>/dev/null || err "Docker Buildx is missing; it builds the images. Install it (apt-get install docker-buildx-plugin), or use --images ghcr."
+  fi
+  ok "Docker Compose: $COMPOSE_VERSION"
+fi
+
 if id "$APP_USER" &>/dev/null; then
-  run "usermod -aG docker $APP_USER"
+  getent group docker &>/dev/null && run "usermod -aG docker $APP_USER"
 fi
-
-# ── Docker Compose plugin check ───────────────────────────────────────────────
-if ! docker compose version &>/dev/null; then
-  run "apt-get install -y -qq docker-compose-plugin >/dev/null"
-fi
-ok "Docker Compose: $(docker compose version --short 2>/dev/null || echo 'installed')"
 
 # ==============================================================================
 # PHASE 5: FIREWALL (SAFE — NO RESET)
@@ -378,9 +481,8 @@ step "Phase 5: Firewall — Safe Port Opening"
 
 if command -v ufw &>/dev/null; then
   # NEVER reset, NEVER change default policies on existing systems
-  # Only ADD the ports we need
+  # Only ADD the ports we need. The API listens on 127.0.0.1 only and needs no rule.
   run "ufw allow $PANEL_PORT/tcp >/dev/null 2>&1 || true"
-  run "ufw allow $API_PORT/tcp   >/dev/null 2>&1 || true"
 
   if [[ "$INSTALL_MODE" == "clean" ]]; then
     run "ufw allow 80/tcp  >/dev/null 2>&1 || true"
@@ -394,7 +496,7 @@ if command -v ufw &>/dev/null; then
   ok "Firewall ports opened (no rules were removed or reset)"
 else
   warn "UFW not found — skipping firewall configuration"
-  info "Ensure ports $PANEL_PORT and $API_PORT are accessible"
+  info "Ensure ports $PANEL_PORT, $TRAEFIK_HTTP and $TRAEFIK_HTTPS are accessible"
 fi
 
 # ==============================================================================
@@ -405,234 +507,164 @@ step "Phase 6: System User & Directories"
 
 if ! id "$APP_USER" &>/dev/null; then
   run "useradd -r -m -s /bin/bash $APP_USER"
-  run "usermod -aG docker $APP_USER"
+  getent group docker &>/dev/null && run "usermod -aG docker $APP_USER"
   ok "System user '$APP_USER' created"
 else
   ok "System user '$APP_USER' already exists"
 fi
 
-run "mkdir -p $INSTALL_DIR/data/{postgres,redis,letsencrypt}"
-run "mkdir -p $INSTALL_DIR/traefik/rules $INSTALL_DIR/scan $INSTALL_DIR/scripts $INSTALL_DIR/actions/requests $INSTALL_DIR/actions/results"
+run "mkdir -p $INSTALL_DIR/scan $INSTALL_DIR/scripts $INSTALL_DIR/actions/requests $INSTALL_DIR/actions/results"
 run "mkdir -p /var/www/sites /var/log/dbbkp"
-run "chown -R $APP_USER:$APP_USER $INSTALL_DIR /var/www/sites /var/log/dbbkp"
+run "chown $APP_USER:$APP_USER $INSTALL_DIR /var/log/dbbkp"
 ok "Directories created"
 
 # ==============================================================================
-# PHASE 7: WRITE ENV FILE
+# PHASE 7: GET THE SOURCE
 # ==============================================================================
 
-step "Phase 7: Writing Environment Configuration"
+step "Phase 7: Deploy King Source"
 
-run "cat > $INSTALL_DIR/.env << 'ENVEOF'
-# ── Core ────────────────────────────────────
-NODE_ENV=production
-DOMAIN=${USER_DOMAIN:-localhost}
+# The compose files and the server watch come from the source; with --images source, the images too.
+# Run from a checkout (sudo bash scripts/install.sh), it uses that checkout. Otherwise it keeps a
+# clone in $INSTALL_DIR/src and brings it up to date on every run.
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+LOCAL_SRC=""
+if [[ -f "$SCRIPT_PATH" && -z "$REPO_FLAG" && -z "$GIT_REF" ]]; then
+  candidate="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+  [[ -f "$candidate/deploy/compose.yml" && -f "$candidate/apps/api/Dockerfile" ]] && LOCAL_SRC="$candidate"
+fi
+REPO="${REPO_FLAG:-$(env_get DK_GIT_REPO)}"; REPO="${REPO:-$REPO_URL}"
+REF="${GIT_REF:-$WANT_VERSION}"; [[ -z "$REF" ]] && REF=$(env_get DK_GIT_REF)
 
-# ── Ports ───────────────────────────────────
-PORT=$PANEL_PORT
-API_PORT=$API_PORT
-
-# ── Database ────────────────────────────────
-DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@dbbkp-postgres:${PG_PORT}/${DB_NAME}
-DB_USER=${DB_USER}
-DB_PASSWORD=${DB_PASS}
-DB_NAME=${DB_NAME}
-
-# ── Redis ───────────────────────────────────
-REDIS_URL=redis://:${REDIS_PASS}@dbbkp-redis:${REDIS_PORT}
-REDIS_PASSWORD=${REDIS_PASS}
-
-# ── Security ────────────────────────────────
-JWT_SECRET=${JWT_SECRET}
-JWT_EXPIRES=7d
-INTERNAL_SECRET=${INTERNAL_SECRET}
-MASTER_KEY=${MASTER_KEY}
-
-# ── Panel ───────────────────────────────────
-NEXT_PUBLIC_API_URL=http://\${DOMAIN}:\${API_PORT}
-NEXT_PUBLIC_WS_URL=ws://\${DOMAIN}:\${API_PORT}
-
-# ── Integrations (fill in as needed) ────────
-CLOUDFLARE_API_TOKEN=
-CLOUDFLARE_ZONE_ID=
-SERVER_IP=
-ACME_EMAIL=admin@\${DOMAIN:-localhost}
-
-# ── Pipeline Runner ──────────────────────────
-PIPELINE_ISOLATION=docker
-PIPELINE_DOCKER_IMAGE=node:20-bookworm
-PIPELINE_DOCKER_MEMORY=1g
-PIPELINE_DOCKER_CPUS=1
-PIPELINE_CONCURRENCY=2
-ENVEOF"
-
-run "chmod 600 $INSTALL_DIR/.env"
-ok "Environment file written to $INSTALL_DIR/.env"
-
-# ==============================================================================
-# PHASE 8: DOCKER COMPOSE (PRODUCTION)
-# ==============================================================================
-
-step "Phase 8: Writing Docker Compose Stack"
-
-# Traefik section differs by mode
-if [[ "$INSTALL_MODE" == "clean" ]]; then
-  TRAEFIK_CMD_HTTPS="- \"--entrypoints.websecure.address=:443\""
-  TRAEFIK_CMD_ACME="- \"--certificatesresolvers.letsencrypt.acme.tlschallenge=true\""
-  TRAEFIK_CMD_EMAIL="- \"--certificatesresolvers.letsencrypt.acme.email=\${ACME_EMAIL}\""
-  TRAEFIK_CMD_STORE="- \"--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json\""
-  TRAEFIK_PORTS="    ports:\n      - \"${TRAEFIK_HTTP}:80\"\n      - \"${TRAEFIK_HTTPS}:443\""
+if [[ -n "$LOCAL_SRC" ]]; then
+  SOURCE_DIR="$LOCAL_SRC"
+  ok "Using this checkout: $SOURCE_DIR"
 else
-  TRAEFIK_CMD_HTTPS="- \"--entrypoints.websecure.address=:8443\""
-  TRAEFIK_CMD_ACME=""
-  TRAEFIK_CMD_EMAIL=""
-  TRAEFIK_CMD_STORE=""
-  TRAEFIK_PORTS="    ports:\n      - \"${TRAEFIK_HTTP}:80\"\n      - \"${TRAEFIK_HTTPS}:8443\""
+  SOURCE_DIR="$INSTALL_DIR/src"
+  if $DRY_RUN; then
+    dry "Would clone or update $REPO${REF:+ ($REF)} in $SOURCE_DIR"
+  elif [[ -d "$SOURCE_DIR/.git" ]]; then
+    log "Updating $SOURCE_DIR from $REPO${REF:+ ($REF)}..."
+    git -C "$SOURCE_DIR" remote set-url origin "$REPO"
+    git -C "$SOURCE_DIR" fetch -q --depth 1 origin "${REF:-HEAD}" >>"$LOG_FILE" 2>&1 || err "Could not fetch ${REF:-the default branch} from $REPO"
+    git -C "$SOURCE_DIR" checkout -q --force FETCH_HEAD
+    ok "Source updated: $(git -C "$SOURCE_DIR" log -1 --format='%h %s' | cut -c1-70)"
+  else
+    log "Cloning $REPO${REF:+ ($REF)}..."
+    rm -rf "$SOURCE_DIR"
+    git clone -q --depth 1 ${REF:+--branch "$REF"} "$REPO" "$SOURCE_DIR" >>"$LOG_FILE" 2>&1 || err "Could not clone $REPO${REF:+ at $REF}"
+    ok "Source cloned: $(git -C "$SOURCE_DIR" log -1 --format='%h %s' | cut -c1-70)"
+  fi
+fi
+if ! $DRY_RUN && [[ ! -f "$SOURCE_DIR/deploy/compose.yml" ]]; then
+  err "$SOURCE_DIR has no deploy/compose.yml. This version of Deploy King predates the container install; use a newer --ref or --version."
 fi
 
-cat > "$INSTALL_DIR/docker-compose.yml" << DCEOF
-services:
-  dbbkp-postgres:
-    image: postgres:15-alpine
-    container_name: dbbkp-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: \${DB_USER}
-      POSTGRES_PASSWORD: \${DB_PASSWORD}
-      POSTGRES_DB: \${DB_NAME}
-    volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-    networks:
-      - dbbkp
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \${DB_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+if [[ "$IMAGES" == "ghcr" ]]; then
+  IMAGE_PREFIX="$GHCR_PREFIX"
+  IMAGE_TAG="${WANT_VERSION#v}"; IMAGE_TAG="${IMAGE_TAG:-$(env_get DK_TAG)}"
+  [[ -z "$IMAGE_TAG" || "$IMAGE_TAG" == local ]] && IMAGE_TAG=latest
+  DK_VERSION_VALUE="$IMAGE_TAG"
+else
+  IMAGE_PREFIX="deploy-king"
+  IMAGE_TAG="local"
+  DK_VERSION_VALUE=$(git -C "$SOURCE_DIR" describe --tags --always 2>/dev/null || echo "source")
+fi
 
-  dbbkp-redis:
-    image: redis:7-alpine
-    container_name: dbbkp-redis
-    restart: unless-stopped
-    command: redis-server --requirepass \${REDIS_PASSWORD} --save 60 1
-    volumes:
-      - ./data/redis:/data
-    networks:
-      - dbbkp
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "\${REDIS_PASSWORD}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+# ==============================================================================
+# PHASE 8: CONFIGURATION (.env AND COMPOSE FILES)
+# ==============================================================================
 
-  dbbkp-traefik:
-    image: traefik:v3.0
-    container_name: dbbkp-traefik
-    restart: unless-stopped
-    command:
-      - "--api.dashboard=false"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=dbbkp"
-      - "--entrypoints.web.address=:80"
-      ${TRAEFIK_CMD_HTTPS}
-      ${TRAEFIK_CMD_ACME}
-      ${TRAEFIK_CMD_EMAIL}
-      ${TRAEFIK_CMD_STORE}
-    ports:
-$(echo -e "$TRAEFIK_PORTS" | sed 's/^    //')
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./data/letsencrypt:/letsencrypt
-      - ./traefik/rules:/etc/traefik/rules
-    networks:
-      - dbbkp
+step "Phase 8: Writing Configuration"
 
-  dbbkp-api:
-    image: ghcr.io/dbbkp/api:latest
-    container_name: dbbkp-api
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - DATABASE_URL=postgresql://\${DB_USER}:\${DB_PASSWORD}@dbbkp-postgres:5432/\${DB_NAME}
-      - REDIS_URL=redis://:\${REDIS_PASSWORD}@dbbkp-redis:6379
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /var/www/sites:/var/www/sites
-      - /var/log/dbbkp:/var/log/dbbkp
-      - ./scan:/host-scan:ro
-      - ./actions/requests:/host-actions/requests
-      - ./actions/results:/host-actions/results:ro
-    depends_on:
-      dbbkp-postgres:
-        condition: service_healthy
-      dbbkp-redis:
-        condition: service_healthy
-    networks:
-      - dbbkp
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=PathPrefix(\`/api\`) || PathPrefix(\`/trpc\`) || PathPrefix(\`/ws\`) || PathPrefix(\`/webhooks\`) || PathPrefix(\`/internal\`)"
-      - "traefik.http.services.api.loadbalancer.server.port=4000"
+SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
+[[ "$SERVER_IP" =~ ^[0-9a-fA-F.:]+$ ]] || SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+SERVER_IP=${SERVER_IP:-127.0.0.1}
 
-  dbbkp-worker:
-    image: ghcr.io/dbbkp/worker:latest
-    container_name: dbbkp-worker
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - DATABASE_URL=postgresql://\${DB_USER}:\${DB_PASSWORD}@dbbkp-postgres:5432/\${DB_NAME}
-      - REDIS_URL=redis://:\${REDIS_PASSWORD}@dbbkp-redis:6379
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /var/www/sites:/var/www/sites
-    depends_on:
-      dbbkp-postgres:
-        condition: service_healthy
-      dbbkp-redis:
-        condition: service_healthy
-    networks:
-      - dbbkp
+# Addresses. With a domain: the panel at portal.<domain>, apps at <name>.<domain>
+# (side by side: <name>.apps.<domain>, which is what the web server examples pass on).
+TLS=false
+if [[ -n "$USER_DOMAIN" ]]; then
+  PANEL_DOMAIN="portal.$USER_DOMAIN"
+  if [[ "$INSTALL_MODE" == "clean" ]]; then
+    BASE_DOMAIN="$USER_DOMAIN"; TLS=true
+    PANEL_URL="https://$PANEL_DOMAIN"
+  else
+    BASE_DOMAIN="apps.$USER_DOMAIN"
+    PANEL_URL="http://$PANEL_DOMAIN"
+  fi
+else
+  PANEL_DOMAIN="portal.localhost"; BASE_DOMAIN="localhost"
+  PANEL_URL="http://$SERVER_IP:$PANEL_PORT"
+fi
+COMPOSE_FILES="compose.yml"; $TLS && COMPOSE_FILES="compose.yml:compose.tls.yml"
+ACME_EMAIL="${ACME_EMAIL_FLAG:-$(env_get ACME_EMAIL)}"
 
-  dbbkp-agent:
-    image: ghcr.io/dbbkp/agent:latest
-    container_name: dbbkp-agent
-    restart: unless-stopped
-    pid: host
-    environment:
-      - INTERNAL_SECRET=\${INTERNAL_SECRET}
-      - API_ENDPOINT=http://dbbkp-api:4000
-    volumes:
-      - /var/www/sites:/var/www/sites:ro
-      - /proc:/proc:ro
-      - /var/spool/cron:/var/spool/cron:ro
-      - /etc/cron.d:/etc/cron.d:ro
-    depends_on:
-      - dbbkp-api
-    networks:
-      - dbbkp
+ENV_FILE="$INSTALL_DIR/.env"
+# Sets one line of .env and leaves every other line, including your own additions, as it is.
+env_set() {
+  local tmp="$ENV_FILE.tmp"
+  K="$1" V="$2" awk 'BEGIN { k = ENVIRON["K"]; v = ENVIRON["V"]; done = 0 }
+    index($0, k "=") == 1 { if (!done) print k "=" v; done = 1; next }
+    { print }
+    END { if (!done) print k "=" v }' "$ENV_FILE" > "$tmp"
+  cat "$tmp" > "$ENV_FILE"; rm -f "$tmp"
+}
 
-  dbbkp-panel:
-    image: ghcr.io/dbbkp/panel:latest
-    container_name: dbbkp-panel
-    restart: unless-stopped
-    env_file: .env
-    depends_on:
-      - dbbkp-api
-    networks:
-      - dbbkp
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.panel.rule=PathPrefix(\`/\`)"
-      - "traefik.http.services.panel.loadbalancer.server.port=3000"
-
-networks:
-  dbbkp:
-    driver: bridge
-DCEOF
-
-run "chmod 640 $INSTALL_DIR/docker-compose.yml"
-ok "Docker Compose stack written"
+if $DRY_RUN; then
+  dry "Would write $ENV_FILE and copy the compose files ($COMPOSE_FILES) to $INSTALL_DIR"
+else
+  umask 077
+  if [[ ! -f "$ENV_FILE" ]]; then
+    cat > "$ENV_FILE" << 'ENVEOF'
+# Deploy King settings, read by docker compose in this folder. Written by scripts/install.sh.
+# The installer sets the lines it knows on every run and keeps everything else, so add your own below.
+# All settings: deploy/.env.example in the source, and the Configuration section of README.md.
+ENVEOF
+  fi
+  env_set DK_INSTALL_MODE "$INSTALL_MODE"
+  env_set DK_IMAGES "$IMAGES"
+  env_set DK_DOMAIN "$USER_DOMAIN"
+  env_set DK_GIT_REPO "$REPO"
+  env_set DK_GIT_REF "$REF"
+  env_set COMPOSE_FILE "$COMPOSE_FILES"
+  env_set DK_SOURCE "$SOURCE_DIR"
+  env_set DK_IMAGE_PREFIX "$IMAGE_PREFIX"
+  env_set DK_TAG "$IMAGE_TAG"
+  env_set DK_VERSION "$DK_VERSION_VALUE"
+  env_set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+  env_set REDIS_PASSWORD "$REDIS_PASSWORD"
+  env_set JWT_SECRET "$JWT_SECRET"
+  env_set INTERNAL_SECRET "$INTERNAL_SECRET"
+  env_set MASTER_KEY "$MASTER_KEY"
+  env_set GITHUB_WEBHOOK_SECRET "$GITHUB_WEBHOOK_SECRET"
+  env_set INITIAL_ADMIN_USERNAME "$ADMIN_USER"
+  env_set INITIAL_ADMIN_PASSWORD "$ADMIN_PASS"
+  env_set DBBKP_BASE_DOMAIN "$BASE_DOMAIN"
+  env_set PANEL_DOMAIN "$PANEL_DOMAIN"
+  env_set DBBKP_TLS "$TLS"
+  env_set ACME_EMAIL "$ACME_EMAIL"
+  env_set PUBLIC_API_URL "$PANEL_URL"
+  env_set PANEL_PORT "$PANEL_PORT"
+  env_set API_PORT "$API_PORT"
+  env_set TRAEFIK_HTTP_PORT "$TRAEFIK_HTTP"
+  env_set TRAEFIK_HTTPS_PORT "$TRAEFIK_HTTPS"
+  env_set DK_SITES_DIR /var/www/sites
+  env_set DK_SCAN_DIR "$INSTALL_DIR/scan"
+  env_set DK_ACTION_REQUESTS_DIR "$INSTALL_DIR/actions/requests"
+  env_set DK_ACTION_RESULTS_DIR "$INSTALL_DIR/actions/results"
+  # Optional overrides from the environment, e.g. a base image from a registry mirror.
+  for key in DK_NODE_IMAGE DK_POSTGRES_IMAGE DK_REDIS_IMAGE DK_TRAEFIK_IMAGE; do
+    [[ -n "${!key:-}" ]] && env_set "$key" "${!key}"
+  done
+  chmod 600 "$ENV_FILE"
+  umask 022
+  cp "$SOURCE_DIR/deploy/compose.yml" "$SOURCE_DIR/deploy/compose.tls.yml" "$INSTALL_DIR/"
+  [[ -f "$SOURCE_DIR/deploy/compose.desktop.yml" ]] && cp "$SOURCE_DIR/deploy/compose.desktop.yml" "$INSTALL_DIR/"
+  # The compose file of installers before 3.0 pulled images that were never published.
+  [[ -f "$INSTALL_DIR/docker-compose.yml" ]] && mv "$INSTALL_DIR/docker-compose.yml" "$INSTALL_DIR/docker-compose.yml.old"
+  ok "Configuration written to $ENV_FILE (compose files: $COMPOSE_FILES)"
+fi
 
 # ==============================================================================
 # PHASE 9: SYSTEMD SERVICE
@@ -640,9 +672,13 @@ ok "Docker Compose stack written"
 
 step "Phase 9: Installing Systemd Service"
 
-cat > /etc/systemd/system/dbbkp.service << SVCEOF
+UP_FLAGS="--remove-orphans"; [[ "$IMAGES" == "ghcr" ]] && UP_FLAGS="--remove-orphans --no-build"
+if $DRY_RUN; then
+  dry "Would install /etc/systemd/system/dbbkp.service (starts the containers at boot)"
+elif has_systemd; then
+  cat > /etc/systemd/system/dbbkp.service << SVCEOF
 [Unit]
-Description=dbbkp Platform
+Description=Deploy King
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -651,62 +687,49 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=$INSTALL_DIR
-EnvironmentFile=$INSTALL_DIR/.env
-ExecStartPre=-/usr/bin/docker compose down --remove-orphans
-ExecStart=/usr/bin/docker compose up -d --wait
-ExecStop=/usr/bin/docker compose down
-ExecReload=/usr/bin/docker compose pull && /usr/bin/docker compose up -d --wait
+ExecStart=/usr/bin/env docker compose up -d $UP_FLAGS
+ExecStop=/usr/bin/env docker compose down
+TimeoutStartSec=900
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=dbbkp
-Restart=on-failure
-RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 SVCEOF
-
-run "systemctl daemon-reload"
-run "systemctl enable dbbkp.service >/dev/null"
-ok "Systemd service installed"
-
-# ==============================================================================
-# PHASE 10: ACME CONFIG & TRAEFIK RULES DIR
-# ==============================================================================
-
-step "Phase 10: Traefik Configuration"
-
-ACME_FILE="$INSTALL_DIR/data/letsencrypt/acme.json"
-if [[ ! -f "$ACME_FILE" ]]; then
-  run "touch $ACME_FILE"
-  run "chmod 600 $ACME_FILE"
+  systemctl daemon-reload
+  systemctl enable dbbkp.service >/dev/null 2>&1
+  ok "Systemd service installed (dbbkp.service)"
+else
+  warn "No systemd here: skipping dbbkp.service. The containers still restart with Docker (restart: unless-stopped)."
 fi
-ok "Traefik configuration ready"
 
 # ==============================================================================
-# PHASE 11: SAVE INSTALL STATE
+# PHASE 10: SAVE INSTALL STATE
 # ==============================================================================
 
-step "Phase 11: Saving Install State"
+step "Phase 10: Saving Install State"
 
-SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
-
-cat > "$STATE_FILE" << STATEEOF
+if $DRY_RUN; then
+  dry "Would write $STATE_FILE"
+else
+  cat > "$STATE_FILE" << STATEEOF
 {
   "version": "${DBBKP_VERSION}",
   "installedAt": "$(_ts)",
   "mode": "${INSTALL_MODE}",
+  "images": "${IMAGES}",
+  "source": "${SOURCE_DIR}",
   "serverIp": "${SERVER_IP}",
   "domain": "${USER_DOMAIN:-localhost}",
+  "panelUrl": "${PANEL_URL}",
   "ports": {
     "panel": ${PANEL_PORT},
     "api": ${API_PORT},
     "traefikHttp": ${TRAEFIK_HTTP},
-    "traefikHttps": ${TRAEFIK_HTTPS},
-    "redis": ${REDIS_PORT},
-    "postgres": ${PG_PORT}
+    "traefikHttps": ${TRAEFIK_HTTPS}
   },
-  "services": ["dbbkp-postgres","dbbkp-redis","dbbkp-traefik","dbbkp-api","dbbkp-worker","dbbkp-agent","dbbkp-panel"],
+  "services": ["dbbkp-postgres","dbbkp-redis","dbbkp-traefik","dbbkp-api","dbbkp-worker","dbbkp-panel"],
   "controlPanels": [$(printf '"%s",' "${CONTROL_PANELS[@]}" | sed 's/,$//; s/^"",\{0,1\}$//')],
   "webServers": [$(printf '"%s",' "${WEB_SERVERS[@]}" | sed 's/,$//; s/^"",\{0,1\}$//')],
   "port80": "${PORT80_OWNER}",
@@ -715,25 +738,33 @@ cat > "$STATE_FILE" << STATEEOF
   "detectedPanels": [$(printf '"%s",' "${DETECTED_PANELS[@]}" | sed 's/,$//; s/^"",\{0,1\}$//')]
 }
 STATEEOF
+  chmod 600 "$STATE_FILE"
+  ok "Install state saved to $STATE_FILE"
+fi
 
-run "chmod 600 $STATE_FILE"
-ok "Install state saved to $STATE_FILE"
+# ==============================================================================
+# PHASE 11: SERVER WATCH, SIDE-BY-SIDE EXAMPLES
+# ==============================================================================
+
+step "Phase 11: Server Watch"
 
 # ── Server watch ────────────────────────────────────────────────────────
 # A read-only scan every five minutes (scripts/host-scan.py). Its first list is what the admin reviews
 # on the Security page: everything that was on this server before or at install.
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$SRC_DIR/host-scan.py" && -f "$SRC_DIR/install-scan.sh" ]]; then
-  run "cp $SRC_DIR/*.sh $SRC_DIR/host-scan.py $SRC_DIR/host-act.py $INSTALL_DIR/scripts/"
-  if $DRY_RUN; then
-    dry "Would install the server watch (dbbkp-scan.timer)"
-  elif INSTALL_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/scripts/install-scan.sh" >>"$LOG_FILE" 2>&1; then
+SRC_DIR="$SOURCE_DIR/scripts"
+if $DRY_RUN; then
+  dry "Would install the server watch (dbbkp-scan.timer)"
+elif [[ -f "$SRC_DIR/host-scan.py" && -f "$SRC_DIR/install-scan.sh" ]]; then
+  cp "$SRC_DIR"/*.sh "$SRC_DIR/host-scan.py" "$SRC_DIR/host-act.py" "$INSTALL_DIR/scripts/"
+  if ! has_systemd; then
+    warn "The server watch needs systemd, which this system does not have; it is not installed."
+  elif env INSTALL_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/scripts/install-scan.sh" >>"$LOG_FILE" 2>&1; then
     ok "Server watch installed (read-only, every 5 minutes)"
   else
     warn "The server watch could not be installed. Later: sudo bash $INSTALL_DIR/scripts/install-scan.sh"
   fi
 else
-  warn "host-scan.py was not found next to the installer, so the server watch is not installed."
+  warn "host-scan.py was not found in $SRC_DIR, so the server watch is not installed."
   info "Copy the scripts folder to $INSTALL_DIR/scripts and run: sudo bash $INSTALL_DIR/scripts/install-scan.sh"
 fi
 
@@ -815,18 +846,40 @@ fi
 
 step "Phase 12: Starting Platform"
 
+ADMIN_WORKS=false
 if $DRY_RUN; then
-  dry "Would run: systemctl start dbbkp.service"
-  dry "Would run: cd $INSTALL_DIR && docker compose up -d"
+  if [[ "$IMAGES" == "ghcr" ]]; then dry "Would run: docker compose pull"; else dry "Would run: docker compose build"; fi
+  dry "Would run: cd $INSTALL_DIR && docker compose up -d --wait $UP_FLAGS"
 else
-  log "Pulling images and starting services (this may take 1-2 minutes)..."
   cd "$INSTALL_DIR"
-  if docker compose up -d --wait 2>>"$LOG_FILE"; then
-    ok "All containers started"
+  show_log_tail() { echo "    Last lines of $LOG_FILE:" >&2; tail -n 25 "$LOG_FILE" | sed 's/^/      /' >&2; }
+  if [[ "$IMAGES" == "ghcr" ]]; then
+    log "Downloading images ($IMAGE_PREFIX-*:$IMAGE_TAG)..."
+    docker compose pull >>"$LOG_FILE" 2>&1 || { show_log_tail; err "Could not download the images. Are they published for tag '$IMAGE_TAG'? Without them, run again with --images source."; }
   else
-    warn "Some containers may not be running yet — images may need to be published first"
-    warn "Run: systemctl start dbbkp once images are available"
+    log "Building the images from $SOURCE_DIR (a few minutes; progress in $LOG_FILE)..."
+    BUILD_START=$(date +%s)
+    # One at a time: a small server runs out of memory building all three together.
+    for svc in dbbkp-api dbbkp-worker dbbkp-panel; do
+      docker compose build "$svc" >>"$LOG_FILE" 2>&1 || { show_log_tail; err "The image build failed ($svc). Nothing that was running has been stopped."; }
+    done
+    ok "Images built in $(( $(date +%s) - BUILD_START ))s"
   fi
+  log "Starting the containers and waiting until each one is healthy..."
+  # shellcheck disable=SC2086
+  if docker compose up -d --wait --wait-timeout 600 $UP_FLAGS >>"$LOG_FILE" 2>&1; then
+    ok "All containers are running and healthy"
+  else
+    show_log_tail
+    docker compose ps >&2 || true
+    err "Some containers did not become healthy. See: cd $INSTALL_DIR && docker compose logs"
+  fi
+  has_systemd && systemctl start dbbkp.service >/dev/null 2>&1 || true
+
+  # The password printed below must really work: sign in with it.
+  LOGIN=$(curl -s --max-time 15 "http://127.0.0.1:$API_PORT/api/auth/login" -H 'content-type: application/json' \
+    -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" || true)
+  [[ "$LOGIN" == *'"token"'* ]] && ADMIN_WORKS=true
 fi
 
 # ==============================================================================
@@ -835,12 +888,21 @@ fi
 
 echo ""
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║    dbbkp Platform Installed Successfully!            ║${NC}"
+if $DRY_RUN; then
+echo -e "${BOLD}${GREEN}║    Dry run finished. Nothing was changed.            ║${NC}"
+else
+echo -e "${BOLD}${GREEN}║    Deploy King is installed and running              ║${NC}"
+fi
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  ${BOLD}Panel URL${NC}     : ${CYAN}http://${SERVER_IP}:${PANEL_PORT}${NC}"
-echo -e "  ${BOLD}API URL${NC}       : ${CYAN}http://${SERVER_IP}:${API_PORT}${NC}"
-echo -e "  ${BOLD}Mode${NC}          : ${YELLOW}${INSTALL_MODE}${NC}"
+echo -e "  ${BOLD}Panel${NC}         : ${CYAN}http://${SERVER_IP}:${PANEL_PORT}${NC}"
+if [[ -n "$USER_DOMAIN" ]]; then
+  echo -e "                  ${CYAN}${PANEL_URL}${NC} (once ${PANEL_DOMAIN} points at this server)"
+  echo -e "  ${BOLD}Apps${NC}          : <name>.${BASE_DOMAIN} (point *.${BASE_DOMAIN} at this server)"
+else
+  echo -e "  ${BOLD}Apps${NC}          : http://<name>.localhost on this server only. For public addresses, run again with --domain example.com"
+fi
+echo -e "  ${BOLD}Mode${NC}          : ${YELLOW}${INSTALL_MODE}${NC}, images: ${IMAGES}"
 if [[ ${#DETECTED_PANELS[@]} -gt 0 ]]; then
   echo -e "  ${BOLD}Coexisting with${NC}: ${YELLOW}${DETECTED_PANELS[*]}${NC}"
 fi
@@ -850,16 +912,24 @@ if [[ "$INSTALL_MODE" == "existing-panel" ]]; then
   echo -e "                  an address, copy ${CYAN}$SIDE_DIR/nginx.conf${NC} (or apache.conf) as its first lines explain."
   echo ""
 fi
-echo -e "  ${BOLD}Admin password${NC}: ${YELLOW}${ADMIN_PASS}${NC}"
+echo -e "  ${BOLD}User name${NC}     : ${YELLOW}${ADMIN_USER}${NC}"
+if $ADMIN_WORKS; then
+  echo -e "  ${BOLD}Admin password${NC}: ${YELLOW}${ADMIN_PASS}${NC}  (checked: it signs in. You are asked to change it.)"
+elif $DRY_RUN; then
+  echo -e "  ${BOLD}Admin password${NC}: shown here after a real run"
+else
+  echo -e "  ${BOLD}Admin password${NC}: the one you chose at the first sign-in (this run did not change it)."
+  echo -e "                  Forgot it? ${CYAN}docker exec dbbkp-api tsx node_modules/@dbbkp/db/src/reset-admin.ts 'new-password'${NC}"
+fi
 echo -e "  ${BOLD}Install log${NC}   : ${LOG_FILE}"
 echo -e "  ${BOLD}State file${NC}    : ${STATE_FILE}"
 echo ""
 echo -e "  ${BOLD}Credentials are stored in:${NC} ${CYAN}$INSTALL_DIR/.env${NC}"
-echo -e "  ${YELLOW}Keep this file secure — it contains all secrets.${NC}"
+echo -e "  ${YELLOW}Keep this file secure — it contains all secrets. Keep a copy of MASTER_KEY.${NC}"
 echo ""
 echo -e "  ${BOLD}Useful commands:${NC}"
-echo -e "    ${CYAN}systemctl status dbbkp${NC}           — service status"
-echo -e "    ${CYAN}cd $INSTALL_DIR && docker compose logs -f${NC} — live logs"
-echo -e "    ${CYAN}bash /opt/dbbkp/scripts/doctor.sh${NC} — run health check"
-echo -e "    ${CYAN}bash /opt/dbbkp/scripts/update.sh${NC}  — update platform"
+echo -e "    ${CYAN}cd $INSTALL_DIR && docker compose ps${NC}       — containers"
+echo -e "    ${CYAN}cd $INSTALL_DIR && docker compose logs -f${NC}  — live logs"
+echo -e "    ${CYAN}bash $INSTALL_DIR/scripts/doctor.sh${NC}        — health check"
+echo -e "    ${CYAN}sudo bash $INSTALL_DIR/scripts/update.sh${NC}   — update (or run this installer again)"
 echo ""

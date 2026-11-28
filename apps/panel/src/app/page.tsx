@@ -7,6 +7,7 @@ import { useCrumbs } from "@/components/shell/Shell";
 import { PageHeader, Skeleton, StatusBadge, bytes, duration, timeAgo, Empty, cx } from "@/components/ui";
 import { useAuth } from "@/components/AuthProvider";
 import { memText } from "@/components/FitCheck";
+import { useCan } from "@/components/useCan";
 
 function Meter({ used, total }: { used: number | null; total: number | null }) {
   const pct = used != null && total ? Math.round((used / total) * 100) : 0;
@@ -18,6 +19,7 @@ function Meter({ used, total }: { used: number | null; total: number | null }) {
 }
 
 export default function OverviewPage() {
+  const can = useCan();
   useCrumbs([{ label: "Overview" }]);
   const { user } = useAuth();
   const q = trpc.system.overview.useQuery(undefined, { refetchInterval: 10_000 });
@@ -27,7 +29,7 @@ export default function OverviewPage() {
   const setup = [
     { done: (providers.data?.length ?? 0) > 0, title: "Connect GitHub", text: "Deploy private repositories and redeploy on every push.", href: "/settings?tab=github", icon: <Github size={16} /> },
     { done: (d?.apps.total ?? 0) > 0, title: "Deploy your first app", text: "From a repository, a Docker image or a template.", href: "/apps/new", icon: <Rocket size={16} /> },
-    { done: false, title: "Back up your databases", text: "Install the dbbkp CLI on your database servers.", href: "/backup-cli", icon: <HardDriveDownload size={16} /> },
+    { done: false, title: "Back up your databases", text: "Set a schedule; every backup is checked with SHA-256 and copied off the server.", href: "/backups", icon: <HardDriveDownload size={16} /> },
   ];
   const showSetup = d && (d.apps.total === 0 || !providers.data?.length);
 
@@ -39,7 +41,7 @@ export default function OverviewPage() {
         actions={
           <>
             <Link href="/templates" className="btn"><LayoutTemplate size={15} /> Templates</Link>
-            <Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> New app</Link>
+            {can("site.create") && <Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> New app</Link>}
           </>
         }
       />
@@ -145,7 +147,7 @@ export default function OverviewPage() {
         {!d ? (
           <div className="card-body stack">{[0, 1, 2].map((i) => <Skeleton key={i} h={20} />)}</div>
         ) : d.recentDeployments.length === 0 ? (
-          <Empty icon={<Rocket size={18} />} title="No deployments yet" action={<Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> Deploy an app</Link>}>
+          <Empty icon={<Rocket size={18} />} title="No deployments yet" action={can("site.create") ? <Link href="/apps/new" className="btn btn-primary"><Plus size={15} /> Deploy an app</Link> : undefined}>
             Deploy from GitHub, any public git URL, a Docker image or a one-click template.
           </Empty>
         ) : (

@@ -959,3 +959,293 @@ export type Entity = typeof entities.$inferSelect;
 export type EntityRelation = typeof entityRelations.$inferSelect;
 export type Workflow = typeof workflows.$inferSelect;
 export type WorkflowStep = typeof workflowSteps.$inferSelect;
+// ─── SERVERS & SSH (servers agent) ───────────────────────────────────────────
+// Other servers this panel signs in to over SSH. Admins only. Private keys and stored passwords are
+// encrypted with MASTER_KEY (AES-256-GCM, @dbbkp/security) and never leave the API.
+
+export type SshAccessRules = {
+  adminsOnly: boolean; // only admins can open a terminal
+  askPassword: boolean; // ask for the panel password before a terminal opens
+  record: boolean; // record terminal sessions (kept 30 days)
+  idleMinutes: number; // close idle sessions after this many minutes; 0 = never
+  allowAutomation: boolean; // workflows and AI agents may run commands (each still needs approval)
+};
+
+export type SshSystemInfo = {
+  os?: string;
+  cpus?: number;
+  memoryMb?: number;
+  memoryUsedMb?: number;
+  diskTotalGb?: number;
+  diskFreeGb?: number;
+  uptimeSec?: number;
+  load?: number;
+  cpuPct?: number;
+  docker?: string | null;
+  passwordAuth?: boolean | null; // the server still offers password sign-in
+  sudo?: "root" | "nopass" | "pass" | "none";
+  latencyMs?: number;
+  seenFrom?: string; // the address this panel connects from, as the server sees it
+  checkedAt?: string;
+};
+
+export const sshKeys = pgTable("ssh_keys", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  label: varchar("label", { length: 120 }).notNull(),
+  type: varchar("type", { length: 20 }).notNull(), // ed25519 | rsa4096 | ecdsa
+  publicKey: text("public_key").notNull(), // one OpenSSH line: "<algo> <base64> <comment>"
+  fingerprint: varchar("fingerprint", { length: 100 }).notNull(), // SHA256:...
+  encryptedPrivateKey: text("encrypted_private_key").notNull(),
+  iv: varchar("iv", { length: 64 }).notNull(),
+  authTag: varchar("auth_tag", { length: 64 }).notNull(),
+  hasPassphrase: boolean("has_passphrase").notNull().default(false),
+  imported: boolean("imported").notNull().default(false),
+  fromAddress: varchar("from_address", { length: 255 }), // from="..." lock; null = usable from anywhere
+  restrict: boolean("restrict").notNull().default(true), // no port, agent or X11 forwarding
+  rotateAfterDays: integer("rotate_after_days"), // null = never remind
+  rotatedFromId: uuid("rotated_from_id"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  lastUsedAt: timestamp("last_used_at"),
+});
+
+export const sshServers = pgTable("ssh_servers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: varchar("name", { length: 80 }).notNull().unique(),
+  host: varchar("host", { length: 255 }).notNull(),
+  port: integer("port").notNull().default(22),
+  username: varchar("username", { length: 64 }).notNull(),
+  authMethod: varchar("auth_method", { length: 20 }).notNull().default("key"), // key | password-once | password
+  keyId: uuid("key_id").references(() => sshKeys.id, { onDelete: "set null" }),
+  // Only for "password every time".
+  encryptedPassword: text("encrypted_password"),
+  passwordIv: varchar("password_iv", { length: 64 }),
+  passwordAuthTag: varchar("password_auth_tag", { length: 64 }),
+  // Trust on first use: what the server showed the first time, and what the admin confirmed.
+  seenHostKeyType: varchar("seen_host_key_type", { length: 40 }),
+  seenHostKeyFingerprint: varchar("seen_host_key_fingerprint", { length: 100 }),
+  hostKeyType: varchar("host_key_type", { length: 40 }),
+  hostKeyFingerprint: varchar("host_key_fingerprint", { length: 100 }),
+  hostKeyTrustedAt: timestamp("host_key_trusted_at"),
+  rules: jsonb("rules").$type<SshAccessRules>().notNull(),
+  // waiting_key | waiting_trust | connected | unreachable | auth_failed | host_key_changed
+  status: varchar("status", { length: 30 }).notNull().default("waiting_key"),
+  statusNote: text("status_note"),
+  system: jsonb("system").$type<SshSystemInfo>().notNull().default({}),
+  timeoutSec: integer("timeout_sec").notNull().default(10),
+  jumpServerId: uuid("jump_server_id"),
+  setupDone: boolean("setup_done").notNull().default(false),
+  lastCheckAt: timestamp("last_check_at"),
+  lastUsedAt: timestamp("last_used_at"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// One row per terminal opened on a server. The recording (asciicast v2, output only) is a file on disk, kept 30 days.
+export const sshSessions = pgTable("ssh_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  serverId: uuid("server_id").notNull().references(() => sshServers.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+  actor: varchar("actor", { length: 120 }).notNull(), // who, in words: a username or "Workflow: nightly check"
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  endedAt: timestamp("ended_at"),
+  endReason: varchar("end_reason", { length: 60 }), // ended | idle | disconnected | server-closed | error
+  commands: integer("commands").notNull().default(0),
+  recordingPath: text("recording_path"),
+  recordingBytes: bigint("recording_bytes", { mode: "number" }).notNull().default(0),
+  ip: varchar("ip", { length: 64 }),
+}, (t) => ({
+  byServer: index("ssh_sessions_server").on(t.serverId, t.startedAt),
+}));
+
+export type SshKey = typeof sshKeys.$inferSelect;
+export type SshServer = typeof sshServers.$inferSelect;
+export type SshSession = typeof sshSessions.$inferSelect;
+// ─── SECURITY AGENT: 2-step sign-in, sign-in devices, alerts, GitHub App ─────
+// (added by the "security" agent; new tables only)
+
+// 2-step sign-in (TOTP) of one user. enabledAt null = set up was started and not confirmed yet.
+export const userTwoFactor = pgTable("user_two_factor", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  /** The shared secret (base32), encrypted with MASTER_KEY. */
+  secretEnc: text("secret_enc").notNull(),
+  iv: varchar("iv", { length: 64 }).notNull(),
+  authTag: varchar("auth_tag", { length: 64 }).notNull(),
+  enabledAt: timestamp("enabled_at"),
+  /** SHA-256 of each unused recovery code. A code is removed when it is used. */
+  recoveryHashes: jsonb("recovery_hashes").$type<string[]>().notNull().default([]),
+  /** The 30-second step of the last code accepted, so a code cannot be used twice. */
+  lastStep: bigint("last_step", { mode: "number" }),
+  /** Wrong codes in a row; reset by a right one. */
+  failures: integer("failures").notNull().default(0),
+  lockedUntil: timestamp("locked_until"),
+  resetBy: uuid("reset_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Where a session was signed in from, for "Signed in on" on a member's page.
+export const sessionDevices = pgTable("session_devices", {
+  sessionId: uuid("session_id").primaryKey().references(() => sessions.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  ip: varchar("ip", { length: 64 }),
+  userAgent: varchar("user_agent", { length: 500 }),
+  /** password | 2-step | recovery code | invitation */
+  method: varchar("method", { length: 20 }),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => ({ byUser: index("session_devices_user_idx").on(t.userId) }));
+
+// One row per thing an alert was sent about. Used to send no more than one alert per item per hour.
+export const alertState = pgTable("alert_state", {
+  kind: varchar("kind", { length: 20 }).notNull(), // job_failed | worker_crash | deploy_failed | host_urgent | test
+  itemKey: varchar("item_key", { length: 300 }).notNull(),
+  title: text("title").notNull(),
+  lastSentAt: timestamp("last_sent_at").notNull().defaultNow(),
+  /** Repeats that were not sent because one went out less than an hour before. */
+  suppressed: integer("suppressed").notNull().default(0),
+  /** What happened on each channel the last time, e.g. { email: "sent", webhook: "HTTP 404" }. */
+  result: jsonb("result").$type<Record<string, string>>().notNull().default({}),
+}, (t) => ({ pk: primaryKey({ columns: [t.kind, t.itemKey] }), bySent: index("alert_state_sent_idx").on(t.lastSentAt) }));
+
+// An installation of this panel's GitHub App on one account or organization. Its git_providers row
+// (type "github_app") is what apps point at; tokens are made from the App's key when they are needed.
+export const githubAppInstallations = pgTable("github_app_installations", {
+  installationId: bigint("installation_id", { mode: "number" }).primaryKey(),
+  providerId: uuid("provider_id").notNull().references(() => gitProviders.id, { onDelete: "cascade" }),
+  account: varchar("account", { length: 100 }).notNull(),
+  accountType: varchar("account_type", { length: 20 }).notNull(), // User | Organization
+  /** all | selected */
+  repositorySelection: varchar("repository_selection", { length: 12 }).notNull().default("selected"),
+  suspendedAt: timestamp("suspended_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type UserTwoFactor = typeof userTwoFactor.$inferSelect;
+export type AlertState = typeof alertState.$inferSelect;
+export type GithubAppInstallation = typeof githubAppInstallations.$inferSelect;
+// ─── DATA (agent: data) ──────────────────────────────────────────────────────
+// Databases, backups, schedules, destinations and restores (panel section 6: Data).
+
+// A PostgreSQL database Deploy King did not create, connected by URL ("Connect existing").
+// The URL is encrypted with MASTER_KEY; the panel only ever shows it with the password hidden.
+export const dbConnections = pgTable("db_connections", {
+  dbInstanceId: uuid("db_instance_id").primaryKey().references(() => dbInstances.id, { onDelete: "cascade" }),
+  host: varchar("host", { length: 255 }).notNull(),
+  port: integer("port").notNull().default(5432),
+  database: varchar("database", { length: 100 }).notNull(),
+  encryptedUrl: text("encrypted_url").notNull(),
+  iv: varchar("iv", { length: 64 }).notNull(),
+  authTag: varchar("auth_tag", { length: 64 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Where backup files are copied. "This server" (kind local) is made by Deploy King and cannot be removed.
+export const backupDestinations = pgTable("backup_destinations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  // local (a folder on this server) | rclone (any rclone remote: S3, Google Drive, SFTP, ...)
+  kind: varchar("kind", { length: 20 }).notNull(),
+  /** An absolute folder for local, "remote:path" for rclone. */
+  location: text("location").notNull(),
+  /** Keep only this many backups of each database or volume here. null: follow each schedule's "keep". */
+  keepLast: integer("keep_last"),
+  builtIn: boolean("built_in").notNull().default(false),
+  lastCheckAt: timestamp("last_check_at"),
+  lastCheckOk: boolean("last_check_ok"),
+  lastCheckMessage: text("last_check_message"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// The backup schedule of one database or one app volume. target_key: "db:<id>" or "vol:<siteId>:<volume>".
+export const backupPolicies = pgTable("backup_policies", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  targetKey: varchar("target_key", { length: 200 }).notNull().unique(),
+  targetType: varchar("target_type", { length: 12 }).notNull(), // database | volume
+  dbInstanceId: uuid("db_instance_id").references(() => dbInstances.id, { onDelete: "cascade" }),
+  siteId: uuid("site_id").references(() => sites.id, { onDelete: "cascade" }),
+  volumeName: varchar("volume_name", { length: 60 }),
+  schedule: varchar("schedule", { length: 100 }).notNull(),
+  timezone: varchar("timezone", { length: 64 }).notNull().default("UTC"),
+  keep: integer("keep").notNull().default(7),
+  destinationIds: jsonb("destination_ids").$type<string[]>().notNull().default([]),
+  enabled: boolean("enabled").notNull().default(true),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type BackupCopy = {
+  destinationId: string;
+  name: string;
+  kind: string;
+  /** Where the file is at that destination. */
+  location: string;
+  ok: boolean;
+  /** The SHA-256 of the copy was read back and matched. */
+  verified: boolean;
+  error?: string;
+  /** Removed by a "keep" rule. */
+  removedAt?: string;
+};
+
+// One backup run: a database dump or a volume archive, its checksum and where it was copied.
+export const backups = pgTable("backups", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  targetKey: varchar("target_key", { length: 200 }).notNull(),
+  targetType: varchar("target_type", { length: 12 }).notNull(), // database | volume
+  dbInstanceId: uuid("db_instance_id").references(() => dbInstances.id, { onDelete: "set null" }),
+  siteId: uuid("site_id").references(() => sites.id, { onDelete: "set null" }),
+  volumeName: varchar("volume_name", { length: 60 }),
+  /** The database or volume name when the backup was made, so history reads well after it is gone. */
+  targetName: varchar("target_name", { length: 255 }).notNull(),
+  engine: varchar("engine", { length: 12 }).notNull(), // pgsql | mysql | files
+  trigger: varchar("trigger", { length: 12 }).notNull().default("manual"), // manual | schedule | safety | retry
+  // queued | running | ok | partial (some copies failed) | failed
+  status: varchar("status", { length: 12 }).notNull().default("queued"),
+  attempts: integer("attempts").notNull().default(0),
+  fileName: varchar("file_name", { length: 255 }),
+  sizeBytes: bigint("size_bytes", { mode: "number" }),
+  sha256: varchar("sha256", { length: 64 }),
+  durationMs: integer("duration_ms"),
+  error: text("error"),
+  copies: jsonb("copies").$type<BackupCopy[]>().notNull().default([]),
+  policyId: uuid("policy_id").references(() => backupPolicies.id, { onDelete: "set null" }),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow(),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+}, (t) => ({ byTarget: index("backups_target_idx").on(t.targetKey, t.createdAt) }));
+
+export type RestoreStep = { at: string; text: string; ok?: boolean };
+
+// One restore: which backup, how, into what, and what happened step by step.
+export const backupRestores = pgTable("backup_restores", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  backupId: uuid("backup_id").notNull().references(() => backups.id, { onDelete: "cascade" }),
+  targetKey: varchar("target_key", { length: 200 }).notNull(),
+  targetName: varchar("target_name", { length: 255 }).notNull(),
+  mode: varchar("mode", { length: 8 }).notNull(), // full | data
+  into: varchar("into", { length: 8 }).notNull(), // new | replace
+  /** The new database, or the folder inside the volume, for into = new. */
+  newName: varchar("new_name", { length: 100 }),
+  verifyChecksum: boolean("verify_checksum").notNull().default(true),
+  safetyBackup: boolean("safety_backup").notNull().default(true),
+  stopApp: boolean("stop_app").notNull().default(false),
+  safetyBackupId: uuid("safety_backup_id"),
+  status: varchar("status", { length: 12 }).notNull().default("queued"), // queued | running | ok | failed
+  steps: jsonb("steps").$type<RestoreStep[]>().notNull().default([]),
+  error: text("error"),
+  resultDbInstanceId: uuid("result_db_instance_id"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow(),
+  finishedAt: timestamp("finished_at"),
+});
+
+export type DbInstance = typeof dbInstances.$inferSelect;
+export type DbConnection = typeof dbConnections.$inferSelect;
+export type BackupDestination = typeof backupDestinations.$inferSelect;
+export type BackupPolicy = typeof backupPolicies.$inferSelect;
+export type Backup = typeof backups.$inferSelect;
+export type BackupRestore = typeof backupRestores.$inferSelect;

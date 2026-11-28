@@ -10,7 +10,6 @@ import {
   ChevronsRight,
   Database,
   FolderOpen,
-  HardDriveDownload,
   LayoutDashboard,
   LayoutTemplate,
   LogOut,
@@ -31,6 +30,7 @@ import { ThemeSwitch } from "@/components/theme";
 import { cx, useClickAway } from "@/components/ui";
 import { CommandPalette } from "./CommandPalette";
 import { trpc } from "@/utils/trpc";
+import { useCan } from "@/components/useCan";
 
 export const Crown = ({ size = 15 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
@@ -50,7 +50,7 @@ export function useCrumbs(crumbs: Crumb[]) {
   }, [key, set]);
 }
 
-type NavItem = { href: string; label: string; icon: React.ReactNode; soon?: boolean; match?: (p: string) => boolean; count?: "apps"; adminOnly?: boolean };
+type NavItem = { href: string; label: string; icon: React.ReactNode; soon?: boolean; match?: (p: string) => boolean; count?: "apps" | "dbs"; adminOnly?: boolean };
 const NAV: Array<{ group?: string; items: NavItem[] }> = [
   {
     items: [
@@ -64,17 +64,16 @@ const NAV: Array<{ group?: string; items: NavItem[] }> = [
   {
     group: "Data",
     items: [
-      { href: "/databases", label: "Databases", icon: <Database size={17} />, soon: true },
-      { href: "/backups", label: "Backups", icon: <Archive size={17} />, soon: true },
-      { href: "/backup-cli", label: "Backup CLI", icon: <HardDriveDownload size={17} /> },
-      { href: "/files", label: "Files", icon: <FolderOpen size={17} />, soon: true },
+      { href: "/databases", label: "Databases", icon: <Database size={17} />, count: "dbs" },
+      { href: "/backups", label: "Backups", icon: <Archive size={17} />, match: (p) => p.startsWith("/backups") || p.startsWith("/backup-cli") },
+      { href: "/files", label: "Files", icon: <FolderOpen size={17} /> },
     ],
   },
   {
     group: "Platform",
     items: [
       { href: "/agents", label: "AI agents", icon: <Bot size={17} /> },
-      { href: "/servers", label: "Servers", icon: <Server size={17} />, soon: true },
+      { href: "/servers", label: "Servers", icon: <Server size={17} />, adminOnly: true },
       { href: "/team", label: "Team", icon: <Users size={17} />, adminOnly: true },
       { href: "/security", label: "Security", icon: <ShieldAlert size={17} />, adminOnly: true },
       { href: "/settings", label: "Settings", icon: <Settings size={17} /> },
@@ -90,7 +89,8 @@ function Sidebar({ rail, open, onToggleRail, onNavigate }: { rail: boolean; open
   const pathname = usePathname();
   const active = (i: NavItem) => (i.match ? i.match(pathname) : pathname.startsWith(i.href));
   const sites = trpc.sites.list.useQuery(undefined, { staleTime: 30_000 });
-  const counts: Record<string, number | undefined> = { apps: sites.data?.filter((s: any) => !s.isPreview).length };
+  const dbs = trpc.database.count.useQuery(undefined, { staleTime: 60_000 });
+  const counts: Record<string, number | undefined> = { apps: sites.data?.filter((s: any) => !s.isPreview).length, dbs: dbs.data };
   const isAdmin = useAuth().user?.role === "admin";
   return (
     <aside className={cx("sidebar", rail && "rail", open && "open")}>
@@ -188,6 +188,7 @@ function AccountMenu() {
 }
 
 function Header({ crumbs, onMenu, onSearch }: { crumbs: Crumb[]; onMenu: () => void; onSearch: () => void }) {
+  const can = useCan();
   return (
     <header className="header">
       <button className="icon-btn mobile-only" onClick={onMenu} aria-label="Menu">
@@ -207,9 +208,11 @@ function Header({ crumbs, onMenu, onSearch }: { crumbs: Crumb[]; onMenu: () => v
         <span className="label-text">Search apps and pages</span>
         <kbd>Ctrl K</kbd>
       </button>
-      <Link href="/apps/new" className="btn btn-primary btn-sm desktop-only">
-        <Plus size={14} /> New app
-      </Link>
+      {can("site.create") && (
+        <Link href="/apps/new" className="btn btn-primary btn-sm desktop-only">
+          <Plus size={14} /> New app
+        </Link>
+      )}
       <GearMenu />
       <AccountMenu />
     </header>

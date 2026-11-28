@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import crypto from "node:crypto";
 import { logAudit } from "@dbbkp/audit";
+import { nextStep } from "../services/twofactor";
+import { checkLimit, noteFailure } from "../services/ratelimit";
 
 const router = Router();
 
@@ -20,15 +22,32 @@ router.post("/login", async (req, res) => {
       password: z.string().min(1),
     }).parse(req.body);
 
+    // The same limit on wrong passwords per address as the panel's sign-in.
+    const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0] || req.socket.remoteAddress || null;
+    try {
+      checkLimit("password", ip);
+    } catch (e: any) {
+      return res.status(429).json({ error: e.message });
+    }
+
     const [user] = await db.select().from(users).where(eq(users.username, username)).limit(1);
 
     if (!user) {
+      noteFailure("password", ip);
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
+      noteFailure("password", ip);
       return res.status(401).json({ error: "Invalid credentials" });
+    }
+    if (user.suspendedAt) {
+      return res.status(403).json({ error: "This account is suspended. Ask the owner of this panel." });
+    }
+    // This older route has no second step. Accounts with 2-step sign-in (or that must set it up) sign in through the panel.
+    if ((await nextStep(user)) !== "none") {
+      return res.status(403).json({ error: "This account uses 2-step sign-in. Sign in through the panel." });
     }
 
     // 1. Create Session in DB

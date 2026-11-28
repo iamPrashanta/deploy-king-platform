@@ -6,7 +6,7 @@ import { trpc } from "../utils/trpc";
 
 const getBaseUrl = () => {
   if (typeof window !== "undefined") return ""; // the browser goes through the Next.js rewrite
-  return process.env.API_INTERNAL_URL || "http://localhost:4000";
+  return process.env.DK_API_URL || process.env.API_INTERNAL_URL || "http://localhost:4000";
 };
 
 export default function TRPCProvider({ children }: { children: React.ReactNode }) {

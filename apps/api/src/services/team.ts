@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { and, asc, eq, inArray, or, type SQL } from "drizzle-orm";
-import { db, sessions, siteAccess, sites, users } from "@dbbkp/db";
+import { db, sessionDevices, sessions, siteAccess, sites, users } from "@dbbkp/db";
 import { JWT_SECRET } from "../config";
 
 /**
@@ -22,8 +22,8 @@ export const TEAM_ROLES = ["admin", "developer", "viewer"] as const;
 export type TeamRole = (typeof TEAM_ROLES)[number];
 
 /** Extras that are off until switched on for one member. Only meaningful for developers. */
-export type MemberGrants = { createApps?: boolean; deleteApps?: boolean; terminal?: boolean; agentTokens?: boolean };
-export const GRANT_KEYS = ["createApps", "deleteApps", "terminal", "agentTokens"] as const;
+export type MemberGrants = { createApps?: boolean; deleteApps?: boolean; terminal?: boolean; agentTokens?: boolean; restoreBackups?: boolean };
+export const GRANT_KEYS = ["createApps", "deleteApps", "terminal", "agentTokens", "restoreBackups"] as const;
 
 /** Permission keys, as checked by permissionProcedure. Kept here so the rules below can be tested without a database. */
 export const P = {
@@ -34,6 +34,9 @@ export const P = {
   TERMINAL_WRITE: "terminal.write",
   CRON_CREATE: "cron.create",
   AGENT_TOKENS: "agent.tokens",
+  // Data: making a backup and restoring one are separate. Developers back up their apps; restoring is an extra.
+  BACKUP_RUN: "backup.run",
+  BACKUP_RESTORE: "backup.restore",
 } as const;
 
 /** Pure: what a team role with these extras may do. Admins are handled before this is reached. */
@@ -43,6 +46,8 @@ export function memberPermissions(role: TeamRole, grants: MemberGrants | null | 
   if (role === "viewer") return out;
   out.add(P.SITE_DEPLOY);
   out.add(P.CRON_CREATE);
+  out.add(P.BACKUP_RUN);
+  if (grants?.restoreBackups) out.add(P.BACKUP_RESTORE);
   if (grants?.createApps) out.add(P.SITE_CREATE);
   if (grants?.deleteApps) out.add(P.SITE_DELETE);
   if (grants?.terminal) {
@@ -106,10 +111,16 @@ export async function requireSite(user: Viewer, siteId: string) {
 }
 
 /** Sign a user in: a server-side session plus the token the panel keeps. Used by login and by accepting an invitation. */
-export async function issueSession(user: { id: string; username: string; email: string; role: string; mustChangePassword: boolean | null }) {
+export type SignInMeta = { ip?: string | null; userAgent?: string | null; method?: "password" | "2-step" | "recovery code" | "invitation" };
+export async function issueSession(user: { id: string; username: string; email: string; role: string; mustChangePassword: boolean | null }, meta: SignInMeta = {}) {
   const sessionId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await db.insert(sessions).values({ id: sessionId, userId: user.id, expiresAt });
+  // Where it was signed in from, for the member's access page. Never blocks signing in.
+  await db
+    .insert(sessionDevices)
+    .values({ sessionId, userId: user.id, ip: meta.ip?.slice(0, 64) ?? null, userAgent: meta.userAgent?.slice(0, 500) ?? null, method: meta.method ?? "password" })
+    .catch((e) => console.error("[Auth] could not record the sign-in device:", e?.message ?? e));
   const token = jwt.sign({ sub: user.id, sid: sessionId, username: user.username, role: user.role, mcp: !!user.mustChangePassword }, JWT_SECRET, { expiresIn: "7d" } as jwt.SignOptions);
   return { token, user: { id: user.id, username: user.username, email: user.email, role: user.role, mustChangePassword: !!user.mustChangePassword } };
 }

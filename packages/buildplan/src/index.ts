@@ -76,7 +76,7 @@ const sh = (cmd: string) => JSON.stringify(["sh", "-c", cmd]);
 /** `web:` entry of a Procfile, if the repository has one. */
 function procfileWeb(dir: string): string | null {
   const match = read(dir, "Procfile").match(/^web:\s*(.+)$/m);
-  return match ? match[1].trim() : null;
+  return match?.[1] ? match[1].trim() : null;
 }
 
 export function detectRuntime(dir: string): Runtime | null {

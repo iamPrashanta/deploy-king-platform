@@ -1,0 +1,20 @@
+# Desktop mode (the Deploy King app's own Linux machine). Use together with compose.yml:
+#   docker compose --env-file .env --env-file /etc/deploy-king/desktop.env \
+#     -f compose.yml -f compose.desktop.yml up -d
+# /etc/deploy-king/desktop.env holds DESKTOP_MODE, DESKTOP_KEY_FILE, DBBKP_TLS=false,
+# DBBKP_BASE_DOMAIN=localhost and the ports. Every port listens on this machine's 127.0.0.1 only.
+services:
+  dbbkp-traefik:
+    ports: !override
+      - "127.0.0.1:${TRAEFIK_HTTP_PORT:-80}:80"
+
+  dbbkp-api:
+    ports: !override
+      - "127.0.0.1:${API_PORT:-4000}:4000"
+    volumes:
+      # The deploy key named by DESKTOP_KEY_FILE
+      - /etc/deploy-king:/etc/deploy-king:ro
+
+  dbbkp-panel:
+    ports: !override
+      - "127.0.0.1:${PANEL_PORT:-3000}:3000"

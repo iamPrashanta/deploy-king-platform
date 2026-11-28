@@ -260,11 +260,11 @@ function parseEnvExample(dir: string): EnvHint[] {
       if (!line || line.startsWith("#")) continue;
       const m = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
       if (!m) continue;
-      const key = m[1];
+      const key = m[1] ?? "";
       if (out.has(key)) continue;
-      let value = m[2].trim();
+      let value = (m[2] ?? "").trim();
       const quoted = value.match(/^(['"])(.*)\1/);
-      value = quoted ? quoted[2] : value.replace(/\s+#.*$/, "");
+      value = quoted ? (quoted[2] ?? "") : value.replace(/\s+#.*$/, "");
       const appUrl = APP_URL_VARS.test(key);
       const placeholder = isPlaceholder(value) || (LOCAL_ONLY.test(key) && isLocal(value));
       const canGenerate = placeholder && GENERATABLE.test(key) && !THIRD_PARTY.test(key);
@@ -412,7 +412,7 @@ export function analyzeProject(dir: string, site: SiteBuildSettings = { type: "a
   }
   if (services.length) facts.push({ label: "Uses", value: services.map((s) => SERVICE_LABEL[s]).join(", ") });
   const needValues = env.filter((e) => e.placeholder && !e.platform && !e.appUrl);
-  if (env.length) facts.push({ label: "Variables", value: `${env.length} in ${env[0].source}` });
+  if (env.length) facts.push({ label: "Variables", value: `${env.length} in ${env[0]?.source ?? ""}` });
   facts.push({ label: "Size", value: `${stats.truncated ? "over " : ""}${stats.files.toLocaleString("en")} files, ${formatBytes(stats.bytes)}` });
 
   // 3. Checks
@@ -543,7 +543,7 @@ export function analyzeProject(dir: string, site: SiteBuildSettings = { type: "a
   const what = framework ? `${framework} app` : runtime ? `${RUNTIME_LABEL[runtime] ?? runtime} app` : "This project";
   const summary =
     verdict === "not-deployable"
-      ? `${blocking[0].title}.`
+      ? `${blocking[0]?.title ?? "Not deployable"}.`
       : verdict === "ready"
         ? `${what} on port ${plan!.port}. Ready to deploy.`
         : `${what} on port ${plan!.port}. ${[

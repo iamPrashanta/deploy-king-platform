@@ -73,7 +73,8 @@ async function availableMemoryBytes(): Promise<number> {
 async function diskOf(dir: string) {
   try {
     const st = await (fs as any).statfs(dir);
-    return { free: st.bavail * st.bsize, total: st.blocks * st.bsize };
+    // used / (used + available), as df counts it: blocks kept for root (often 5%) are neither.
+    return { free: st.bavail * st.bsize, total: st.blocks * st.bsize, used: (st.blocks - st.bfree) * st.bsize };
   } catch {
     return null;
   }
@@ -125,7 +126,7 @@ export async function capacity(opts: { excludeSiteId?: string; excludeWorkerId?:
     const diskTotalMb = Math.floor(d.total / MB);
     const auto = Math.min(10 * 1024, Math.max(2 * 1024, Math.round(diskTotalMb * 0.15)));
     const reserveMb = Math.min(Math.floor(diskTotalMb / 2), settings.diskReserveGb == null ? auto : settings.diskReserveGb * 1024);
-    disk = { totalMb: diskTotalMb, freeMb: Math.floor(d.free / MB), reserveMb, usedPct: Math.round(((d.total - d.free) / d.total) * 100) };
+    disk = { totalMb: diskTotalMb, freeMb: Math.floor(d.free / MB), reserveMb, usedPct: Math.round((d.used / Math.max(1, d.used + d.free)) * 100) };
   }
 
   // "Room for N more" is always counted in default-sized apps, so the number means the same on every server.

@@ -14,6 +14,8 @@ import { decrypt } from "@dbbkp/security";
 import { createBuildPlan, GENERATED_DOCKERFILE, gitAuthArgs, redactToken, resolveBuildRoot, withBuildArgs, NODE_VERSIONS, type BuildPlan } from "./deploy/detect";
 import { PassThrough } from "node:stream";
 import { fireDeployEvent } from "./automation.worker";
+import { alertDeployFailed } from "@dbbkp/notify";
+import { tokenForProvider } from "@dbbkp/github";
 import net from "node:net";
 
 /**
@@ -181,7 +183,8 @@ async function providerToken(site: Site): Promise<string | null> {
   if (!site.gitProviderId) return null;
   const [p] = await db.select().from(gitProviders).where(eq(gitProviders.id, site.gitProviderId)).limit(1);
   if (!p) return null;
-  return decrypt({ encryptedValue: p.encryptedToken, iv: p.iv, authTag: p.authTag });
+  // A GitHub App installation gets a fresh token (valid an hour); a personal token is stored encrypted.
+  return tokenForProvider(p);
 }
 
 /** Named volumes survive redeploys; they are labelled so delete can find them. */
@@ -640,7 +643,9 @@ async function assertDiskHasRoom() {
   let usedPct = 0;
   try {
     const st = await (fs as any).statfs(SITES_ROOT);
-    if (st.blocks > 0) usedPct = Math.round(((st.blocks - st.bavail) / st.blocks) * 100);
+    // as df counts it: blocks kept for root are neither used nor available
+    const used = st.blocks - st.bfree;
+    if (used + st.bavail > 0) usedPct = Math.round((used / (used + st.bavail)) * 100);
   } catch {
     return; // cannot measure: do not block the deploy on that
   }
@@ -996,6 +1001,7 @@ async function deploySite(job: Job<DeployJobData>) {
       .where(eq(sites.id, site.id));
     if (stillServing) log.line("The previous release is still serving traffic.");
     fireDeployEvent(site, { id: deployment.id, trigger: deployment.trigger, status: "failed", error: message }).catch((e) => console.error("[Workflows] deploy event:", e.message));
+    await alertDeployFailed(site, deployment, message, stillServing);
 
     throw err;
   } finally {

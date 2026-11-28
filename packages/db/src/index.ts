@@ -35,3 +35,6 @@ if (process.env.NODE_ENV !== "production") {
 export const db = drizzle(queryClient, { schema });
 
 export * from "./schema";
+
+// Start-up steps: migrations and the first admin (the API runs them before it listens).
+export { runMigrations, ensureFirstAdmin } from "./migrate";

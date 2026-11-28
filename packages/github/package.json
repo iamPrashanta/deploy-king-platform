@@ -1,0 +1,19 @@
+{
+  "name": "@dbbkp/github",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dbbkp/db": "workspace:*",
+    "@dbbkp/security": "workspace:*",
+    "drizzle-orm": "^0.30.10"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.0",
+    "typescript": "^5.2.2"
+  }
+}

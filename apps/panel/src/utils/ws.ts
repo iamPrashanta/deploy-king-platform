@@ -2,7 +2,15 @@
 
 import { useEffect, useRef, useCallback } from "react";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:4000";
+/**
+ * Where WebSockets go. By default the panel's own address: the panel forwards /ws to the API,
+ * so the same build works on any server. NEXT_PUBLIC_WS_URL (set at build time) overrides it.
+ */
+export function wsBase() {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL.replace(/\/+$/, "");
+  if (typeof window !== "undefined") return `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
+  return "ws://localhost:4000";
+}
 
 type MessageHandler = (msg: any) => void;
 
@@ -37,7 +45,7 @@ function connect() {
   const token = getToken();
   if (!token) return;
 
-  const url = `${WS_URL}/ws?token=${encodeURIComponent(token)}`;
+  const url = `${wsBase()}/ws?token=${encodeURIComponent(token)}`;
   const ws = new WebSocket(url);
   state.ws = ws;
 

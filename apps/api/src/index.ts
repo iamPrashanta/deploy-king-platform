@@ -22,6 +22,7 @@ import webhooksRouter from "./routes/webhooks";
 import hooksRouter from "./routes/hooks";
 import mcpRouter from "./routes/mcp";
 import { llmsTxt } from "./routes/llms";
+import { mountDesktop } from "./routes/desktop"; // desktop agent: Deploy King Desktop key (DESKTOP_MODE only)
 import { syncAllSchedules } from "./services/automations";
 import securityRouter from "./routes/security";
 import nodesRouter, { sweepOfflineNodes, pruneOldMetrics } from "./routes/nodes";
@@ -29,7 +30,11 @@ import { startExpirationReaper } from "./services/reaper";
 import { startAutomaticCleanup } from "./services/cleanup";
 import { startHostWatch } from "./services/hostwatch";
 import { syncSchedules } from "./services/cronjobs";
+import { syncBackupSchedules } from "./services/backups";
+import filesRest from "./routes/files";
 import { startReconciliationLoop } from "./services/reconciler";
+import { runMigrations, ensureFirstAdmin, db } from "@dbbkp/db";
+import { sql } from "drizzle-orm";
 
 const app = express();
 
@@ -48,8 +53,10 @@ app.use(morgan("dev", {
 }));
 
 // ─── REST Auth (legacy support) ─────────────────────────────
+mountDesktop(app); // before /api/auth: closes register on desktop machines
 app.use("/api/auth", authRouter);
 app.use("/api/sites", requireAuth, sitesRouter);
+app.use("/api/files", filesRest); // Data · Files: downloads and uploads (checks its own access)
 app.use("/webhooks", webhooksRouter);
 app.use("/hooks", hooksRouter);
 app.use("/mcp", mcpRouter); // AI agents (Model Context Protocol)
@@ -75,8 +82,14 @@ app.use("/api/backup", requireAuth, requireAdmin, backupRouterLegacy);
 app.use("/api/infra", requireAuth, requireAdmin, infraRouterLegacy);
 
 // ─── Health ────────────────────────────────────────────────
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", ts: Date.now() });
+// Used by the container health check and the installer. 503 while the database does not answer.
+app.get("/health", async (_req, res) => {
+  try {
+    await db.execute(sql`select 1`);
+    res.json({ status: "ok", ts: Date.now() });
+  } catch {
+    res.status(503).json({ status: "error", error: "database unavailable", ts: Date.now() });
+  }
 });
 
 app.post("/internal/log", (req, res) => {
@@ -106,12 +119,21 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 
 // ─── HTTP + WS Server ──────────────────────────────────────
-// Re-register workflow schedules on boot (BullMQ keeps them, this repairs drift).
-syncAllSchedules()
-  .then((n) => console.log(`[Workflows] ${n} workflow schedules checked`))
-  .catch((err) => console.error("[Workflows] Could not sync schedules:", err.message));
-
 async function startServer() {
+  // A new install or an update needs no manual step: apply migrations, then create the
+  // first admin from INITIAL_ADMIN_PASSWORD if there is no user yet. DB_AUTO_MIGRATE=false turns this off.
+  if (process.env.DB_AUTO_MIGRATE !== "false") {
+    console.log("[DB] Applying migrations...");
+    await runMigrations();
+    console.log("[DB] Migrations are up to date");
+    await ensureFirstAdmin();
+  }
+
+  // Re-register workflow schedules on boot (BullMQ keeps them, this repairs drift).
+  syncAllSchedules()
+    .then((n) => console.log(`[Workflows] ${n} workflow schedules checked`))
+    .catch((err) => console.error("[Workflows] Could not sync schedules:", err.message));
+
   const DEFAULT_PORT = Number(process.env.API_PORT ?? 4000);
   
   // Use a fixed port to keep frontend alignment
@@ -152,6 +174,7 @@ async function startServer() {
     startAutomaticCleanup();
     startHostWatch();
     syncSchedules().then((r) => console.log(`[Cron] ${r.jobs} scheduled jobs, ${r.added} schedules restored`)).catch((e) => console.error("[Cron] could not sync schedules:", e?.message ?? e));
+    syncBackupSchedules().then((r) => console.log(`[Backups] ${r.policies} backup schedules, ${r.added} restored`)).catch((e) => console.error("[Backups] could not sync schedules:", e?.message ?? e));
 
     // Reconciliation loop: fix drift/crashed containers every 15m
     startReconciliationLoop();
