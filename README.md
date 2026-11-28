@@ -349,6 +349,26 @@ On a server, the settings are in `/opt/dbbkp/.env`; after a change, run `cd /opt
 
 Capacity, cleanup and the server watch are set in the panel, under **Settings › Server** and **Security**, not in `.env`.
 
+### Desktop mode
+
+Deploy King Desktop runs this same stack inside its own small Linux machine, with `deploy/compose.desktop.yml` on top of `deploy/compose.yml`: every port listens on `127.0.0.1` only. The app writes its settings to `/etc/deploy-king/desktop.env` in that machine, and the API gets them from there.
+
+| Setting | What it is | Default |
+| --- | --- | --- |
+| `DESKTOP_MODE` | `true`: the app signs in with its own key (`Authorization: Desktop <key>`), and registering is closed | off |
+| `DESKTOP_KEY_FILE` | The app's key | `/etc/deploy-king/desktop.key` |
+| `DESKTOP_REQUIRE_TICKETS` | `true`, together with `DESKTOP_MODE`: every deploy and change needs a ticket | off |
+| `DESKTOP_TICKET_KEYS_FILE` | The public keys tickets are signed with: a JSON list of `{ "kid", "alg": "Ed25519", "publicKey" }` | `/etc/deploy-king/ticket-keys.json` |
+| `DESKTOP_DEVICE_FILE` | This computer's device id, as plain text | `/etc/deploy-king/device-id` |
+
+The three files are read on every call, so the app can replace them while the API runs. A changed `desktop.env` needs `docker compose up -d` again.
+
+A ticket is the signed, one-time approval the app gets from the user's Deploy King account before a deploy or a change, and sends in the `x-dk-ticket` header. The API checks that it is signed by a known key, has not expired, was made for this computer and for this kind of action (deploy, change or delete), was not used before, and, for a ZIP upload, names exactly the uploaded file. Otherwise it answers HTTP 403 with a code such as `ticket_required`, `ticket_expired` or `ticket_used`, and writes the refusal to the audit log. Opening a terminal needs a ticket too, in the WebSocket message that opens it.
+
+Reading and signing in need no ticket. Which request needs which kind of ticket is one table, `packages/tickets/src/table.ts`, that the app uses as well. Things set up earlier keep running without new tickets: scheduled jobs, deploys on push and workflow triggers are not requests from the app.
+
+Outside desktop mode none of this is active.
+
 ---
 
 ## Everyday operations
@@ -380,6 +400,7 @@ On a server, the API applies new migrations when it starts. In development, afte
 | `apps/web` | An older interface, no longer used |
 | `packages/db` | Database schema and migrations (Drizzle, PostgreSQL) |
 | `packages/assistant` | The AI assistant behind `dk` and the desktop app: the agent loop on the Anthropic Messages API, its tools over the Deploy King API |
+| `packages/tickets` | Tickets for Deploy King Desktop with an account: the format, the check, and the table of which request needs which ticket. No dependencies, so the desktop app uses the same code |
 | `packages/audit`, `packages/security`, `packages/utils`, … | Shared code: the audit log, encryption, helpers |
 | `packages/agent` | A Go agent that reports from servers |
 | `scripts/` | The installer, the server scan (`host-scan.py`) and its action helper (`host-act.py`), maintenance scripts |

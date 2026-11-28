@@ -3,6 +3,13 @@
 #     -f compose.yml -f compose.desktop.yml up -d
 # /etc/deploy-king/desktop.env holds DESKTOP_MODE, DESKTOP_KEY_FILE, DBBKP_TLS=false,
 # DBBKP_BASE_DOMAIN=localhost and the ports. Every port listens on this machine's 127.0.0.1 only.
+#
+# With a Deploy King account the app also writes there (see deploy/.env.example, "Desktop mode"):
+#   DESKTOP_REQUIRE_TICKETS=true    the API refuses every deploy and change without a ticket
+#   DESKTOP_TICKET_KEYS_FILE        default /etc/deploy-king/ticket-keys.json
+#   DESKTOP_DEVICE_FILE             default /etc/deploy-king/device-id
+# A changed desktop.env needs `docker compose up -d` again (it recreates the API); the two files and
+# the key are read by the API on every call and need nothing.
 services:
   dbbkp-traefik:
     ports: !override
@@ -11,8 +18,16 @@ services:
   dbbkp-api:
     ports: !override
       - "127.0.0.1:${API_PORT:-4000}:4000"
+    # The desktop settings reach the API from this file, whatever --env-file compose was started with.
+    # It is required here: without it the API would start as an ordinary server, with registering open.
+    # They are NOT repeated under `environment:` on purpose: an entry there replaces the file's value
+    # with whatever compose itself was given, so a start without --env-file would switch tickets off.
+    env_file:
+      - path: /etc/deploy-king/desktop.env
+        required: true
     volumes:
-      # The deploy key named by DESKTOP_KEY_FILE
+      # The app's key (DESKTOP_KEY_FILE), the control server's public keys (DESKTOP_TICKET_KEYS_FILE)
+      # and this computer's device id (DESKTOP_DEVICE_FILE). Read-only: only the app writes them.
       - /etc/deploy-king:/etc/deploy-king:ro
 
   dbbkp-panel:
